@@ -5,6 +5,7 @@ import Layout from "./components/Layout";
 import Dashboard from "./components/Dashboard";
 import Files from "./components/Files";
 import Categories from "./components/Categories";
+import CategoryFiles from "./components/CategoryFiles";
 import "./index.css";
 
 function Settings() {
@@ -44,6 +45,15 @@ const router = createBrowserRouter([
     element: (
       <Layout>
         <Categories />
+      </Layout>
+    ),
+    errorElement: <ErrorPage />,
+  },
+  {
+    path: "/categoriesFiles",
+    element: (
+      <Layout>
+        <CategoryFiles />
       </Layout>
     ),
     errorElement: <ErrorPage />,

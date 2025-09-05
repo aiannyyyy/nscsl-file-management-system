@@ -12,7 +12,8 @@ import {
   ChevronDown,
   Building2,
   HelpCircle,
-  LogOut
+  LogOut,
+  BookOpen
 } from "lucide-react";
 
 type LayoutProps = {
@@ -41,6 +42,7 @@ export default function Layout({ children }: LayoutProps) {
     { path: "/", label: "Dashboard", icon: Home },
     { path: "/files", label: "Files", icon: FileText },
     { path: "/categories", label: "Categories", icon: FolderOpen }, // New item
+    { path: "/categoriesFiles", label: "Categories Files", icon: BookOpen }, // New item
     { path: "/settings", label: "Settings", icon: Settings }
   ];
 
