@@ -8,6 +8,7 @@ import {
   Search,
   Bell,
   User,
+  FolderOpen,
   ChevronDown,
   Building2,
   HelpCircle,
@@ -35,9 +36,11 @@ export default function Layout({ children }: LayoutProps) {
     return window.location.pathname === path; // Temporary fallback
   };
 
+  // In your Layout.tsx navItems array, add:
   const navItems = [
     { path: "/", label: "Dashboard", icon: Home },
     { path: "/files", label: "Files", icon: FileText },
+    { path: "/categories", label: "Categories", icon: FolderOpen }, // New item
     { path: "/settings", label: "Settings", icon: Settings }
   ];
 

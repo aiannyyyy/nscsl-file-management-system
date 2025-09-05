@@ -4,6 +4,7 @@ import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import Layout from "./components/Layout";
 import Dashboard from "./components/Dashboard";
 import Files from "./components/Files";
+import Categories from "./components/Categories";
 import "./index.css";
 
 function Settings() {
@@ -34,6 +35,15 @@ const router = createBrowserRouter([
     element: (
       <Layout>
         <Files />
+      </Layout>
+    ),
+    errorElement: <ErrorPage />,
+  },
+  {
+    path: "/categories",
+    element: (
+      <Layout>
+        <Categories />
       </Layout>
     ),
     errorElement: <ErrorPage />,
