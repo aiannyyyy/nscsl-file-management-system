@@ -3,11 +3,8 @@ import ReactDOM from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import Layout from "./components/Layout";
 import Dashboard from "./components/Dashboard";
+import Files from "./components/Files";
 import "./index.css";
-
-function Files() {
-  return <h2 className="text-2xl font-bold">📂 Files Page</h2>;
-}
 
 function Settings() {
   return <h2 className="text-2xl font-bold">⚙️ Settings Page</h2>;
