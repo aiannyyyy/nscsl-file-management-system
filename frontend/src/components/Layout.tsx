@@ -16,35 +16,54 @@ import {
   BookOpen
 } from "lucide-react";
 
+interface User {
+  name: string;
+  user_name: string;
+  department?: string;
+  role: string;
+  email: string; // Added email field
+}
+
+interface UserData {
+  token: string;
+  user: User;
+}
+
 type LayoutProps = {
   children: React.ReactNode;
+  userData: UserData | null;
+  onLogout: () => void;
 };
 
-// Note: You'll need to import Link and useLocation from react-router-dom in your actual implementation
-// This is just the component structure - replace the navItems.map section with your actual routing
-
-export default function Layout({ children }: LayoutProps) {
+export default function Layout({ children, userData, onLogout }: LayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
-  // const location = useLocation(); // Uncomment this when using react-router-dom
 
   const toggleSidebar = () => {
     setSidebarCollapsed(!sidebarCollapsed);
   };
 
-  const isActive = (path: string) => {
-    // return location.pathname === path; // Uncomment this when using react-router-dom
-    return window.location.pathname === path; // Temporary fallback
+  const handleLogout = () => {
+    setUserDropdownOpen(false);
+    onLogout();
   };
 
-  // In your Layout.tsx navItems array, add:
+  const isActive = (path: string) => {
+    return window.location.pathname === path;
+  };
+
   const navItems = [
-    { path: "/", label: "Dashboard", icon: Home },
+    { path: "/dashboard", label: "Dashboard", icon: Home },
     { path: "/files", label: "Files", icon: FileText },
-    { path: "/categories", label: "Categories", icon: FolderOpen }, // New item
-    { path: "/categoriesFiles", label: "Categories Files", icon: BookOpen }, // New item
+    { path: "/categories", label: "Categories", icon: FolderOpen },
+    { path: "/categoriesFiles", label: "Categories Files", icon: BookOpen },
     { path: "/settings", label: "Settings", icon: Settings }
   ];
+
+  // Get user display name and email
+  const displayName = userData?.user?.name || "Unknown User";
+  const displayEmail = userData?.user?.email || "No email";
+  const displayRole = userData?.user?.role || "User";
 
   return (
     <div className="flex h-screen bg-gray-100">
@@ -110,8 +129,8 @@ export default function Layout({ children }: LayoutProps) {
                 <User className="w-4 h-4" />
               </div>
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-white truncate">John Doe</div>
-                <div className="text-blue-200 text-xs truncate">Administrator</div>
+                <div className="font-medium text-white truncate">{displayName}</div>
+                <div className="text-blue-200 text-xs truncate">{displayRole}</div>
               </div>
             </div>
           </div>
@@ -177,8 +196,8 @@ export default function Layout({ children }: LayoutProps) {
                   <User className="w-4 h-4 text-white" />
                 </div>
                 <div className="hidden md:block text-left">
-                  <div className="text-sm font-medium text-gray-900">John Doe</div>
-                  <div className="text-xs text-gray-500">Administrator</div>
+                  <div className="text-sm font-medium text-gray-900">{displayName}</div>
+                  <div className="text-xs text-gray-500">{displayRole}</div>
                 </div>
                 <ChevronDown className="w-4 h-4 text-gray-400" />
               </button>
@@ -187,8 +206,9 @@ export default function Layout({ children }: LayoutProps) {
               {userDropdownOpen && (
                 <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
                   <div className="px-4 py-2 border-b border-gray-100">
-                    <div className="text-sm font-medium text-gray-900">John Doe</div>
-                    <div className="text-xs text-gray-500">john.doe@company.com</div>
+                    <div className="text-sm font-medium text-gray-900">{displayName}</div>
+                    <div className="text-xs text-gray-500">{displayEmail}</div>
+                    <div className="text-xs text-gray-400 mt-1">{displayRole}</div>
                   </div>
                   
                   <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
@@ -203,7 +223,10 @@ export default function Layout({ children }: LayoutProps) {
                   
                   <hr className="my-2" />
                   
-                  <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors">
+                  <button 
+                    onClick={handleLogout}
+                    className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                  >
                     <LogOut className="w-4 h-4" />
                     Sign Out
                   </button>
