@@ -8,6 +8,7 @@ import CategoryFiles from "./components/CategoryFiles";
 import Login from "./components/Login";
 
 interface User {
+  id?: string | number; // Add the id field that comes from your database
   name: string;
   user_name: string;
   department?: string;
@@ -47,9 +48,19 @@ export default function App() {
     if (token && storedUser) {
       try {
         const parsedUser = JSON.parse(storedUser);
-        setUserData({ token, user: parsedUser });
-        setIsAuthenticated(true);
+        
+        // Validate that the stored data has required fields
+        if (parsedUser && parsedUser.user_name) {
+          setUserData({ token, user: parsedUser });
+          setIsAuthenticated(true);
+        } else {
+          // Clear invalid stored data
+          console.log('Invalid stored user data, clearing...');
+          localStorage.removeItem('authToken');
+          localStorage.removeItem('userData');
+        }
       } catch (error) {
+        console.log('Error parsing stored user data, clearing...');
         // Clear invalid stored data
         localStorage.removeItem('authToken');
         localStorage.removeItem('userData');
@@ -59,6 +70,7 @@ export default function App() {
   }, []);
 
   const handleLoginSuccess = (userData: UserData) => {
+    console.log('Login successful, user data:', userData);
     setUserData(userData);
     setIsAuthenticated(true);
     
@@ -84,7 +96,7 @@ export default function App() {
   }
 
   // If not authenticated, show login
-  if (!isAuthenticated) {
+  if (!isAuthenticated || !userData) {
     return <Login onLoginSuccess={handleLoginSuccess} />;
   }
 
@@ -99,7 +111,7 @@ export default function App() {
       path: "/dashboard",
       element: (
         <Layout userData={userData} onLogout={handleLogout}>
-          <Dashboard />
+          <Dashboard currentUser={userData.user} />
         </Layout>
       ),
       errorElement: <ErrorPage />,
@@ -108,7 +120,7 @@ export default function App() {
       path: "/files",
       element: (
         <Layout userData={userData} onLogout={handleLogout}>
-          <Files />
+          <Files currentUser={userData.user} />
         </Layout>
       ),
       errorElement: <ErrorPage />,
