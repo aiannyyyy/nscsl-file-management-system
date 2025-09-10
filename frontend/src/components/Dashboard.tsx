@@ -458,11 +458,10 @@ export default function Dashboard({ currentUser }: DashboardProps) {
           </div>
         </div>
       </div>
-
       
-      {/* Option 1: Using grid-cols-2 (half width, you can add another card later) */}
+      {/* Recent Activity - Real Time with Scrollable Content */}
       <div className="grid grid-cols-2 gap-6">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 h-96">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-gray-900">Recent Activity</h3>
             <div className="flex items-center gap-2">
@@ -484,54 +483,57 @@ export default function Dashboard({ currentUser }: DashboardProps) {
             </div>
           </div>
           
-          {activityLoading && (
-            <div className="flex items-center justify-center py-4">
-              <RefreshCw className="w-4 h-4 animate-spin text-gray-500" />
-              <span className="ml-2 text-sm text-gray-500">Loading activities...</span>
-            </div>
-          )}
-          
-          {!activityLoading && recentActivities.length > 0 ? (
-            <div className="space-y-4">
-              {recentActivities.map((activity) => (
-                <div key={activity.id} className="flex items-start gap-3">
-                  <div className="p-1 bg-gray-50 rounded-full mt-1">
-                    {getActivityIcon(activity.action, activity.target_type)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm text-gray-900">
-                      <span className="font-medium">{activity.user_name}</span>{' '}
-                      {getActionDescription(activity.action, activity.target_type, activity.target_name)}
-                      {getActivityBadge(activity.action, activity.target_type)}
+          {/* Scrollable content area */}
+          <div className="h-80 overflow-y-auto overflow-x-hidden">
+            {activityLoading && (
+              <div className="flex items-center justify-center py-4">
+                <RefreshCw className="w-4 h-4 animate-spin text-gray-500" />
+                <span className="ml-2 text-sm text-gray-500">Loading activities...</span>
+              </div>
+            )}
+            
+            {!activityLoading && recentActivities.length > 0 ? (
+              <div className="space-y-4 pr-2">
+                {recentActivities.map((activity) => (
+                  <div key={activity.id} className="flex items-start gap-3">
+                    <div className="p-1 bg-gray-50 rounded-full mt-1 flex-shrink-0">
+                      {getActivityIcon(activity.action, activity.target_type)}
                     </div>
-                    <div className="flex items-center gap-1 mt-1 text-xs text-gray-500">
-                      <Clock className="w-3 h-3" />
-                      {formatTimeAgo(activity.created_at)}
-                      <span className="ml-2">
-                        • {activity.target_type === 'FOLDER' ? 'Folder' : 'File'}
-                      </span>
-                      {activity.additional_info && (
-                        <span className="ml-2 text-xs text-gray-400" title={activity.additional_info}>
-                          • Details available
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-gray-900">
+                        <span className="font-medium">{activity.user_name}</span>{' '}
+                        {getActionDescription(activity.action, activity.target_type, activity.target_name)}
+                        {getActivityBadge(activity.action, activity.target_type)}
+                      </div>
+                      <div className="flex items-center gap-1 mt-1 text-xs text-gray-500 flex-wrap">
+                        <Clock className="w-3 h-3 flex-shrink-0" />
+                        {formatTimeAgo(activity.created_at)}
+                        <span className="ml-2">
+                          • {activity.target_type === 'FOLDER' ? 'Folder' : 'File'}
                         </span>
-                      )}
+                        {activity.additional_info && (
+                          <span className="ml-2 text-xs text-gray-400" title={activity.additional_info}>
+                            • Details available
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          ) : !activityLoading && (
-            <div className="text-center py-8 text-gray-500">
-              <Activity className="w-12 h-12 mx-auto mb-2 text-gray-300" />
-              <p>No recent activity</p>
-              <button 
-                onClick={() => navigate('/files')}
-                className="mt-2 text-blue-600 hover:text-blue-700 font-medium"
-              >
-                Upload your first file
-              </button>
-            </div>
-          )}
+                ))}
+              </div>
+            ) : !activityLoading && (
+              <div className="text-center py-8 text-gray-500 h-full flex flex-col justify-center">
+                <Activity className="w-12 h-12 mx-auto mb-2 text-gray-300" />
+                <p>No recent activity</p>
+                <button 
+                  onClick={() => navigate('/files')}
+                  className="mt-2 text-blue-600 hover:text-blue-700 font-medium"
+                >
+                  Upload your first file
+                </button>
+              </div>
+            )}
+          </div>
         </div>
         
         {/* Empty space for future card or leave empty */}
