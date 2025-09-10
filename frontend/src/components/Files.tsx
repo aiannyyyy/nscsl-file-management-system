@@ -23,7 +23,12 @@ import {
   Home,
   X,
   AlertCircle,
-  CheckCircle
+  CheckCircle,
+  Edit,
+  Move,
+  Copy,
+  Info,
+  RefreshCw
 } from 'lucide-react';
 
 interface FileItem {
@@ -69,9 +74,10 @@ interface BreadcrumbItem {
 interface ApiResponse {
   folders: FolderItem[];
   files: FileItem[];
+  currentFolder?: FolderItem;
+  location?: string;
 }
 
-// Add this interface at the top of your Files component
 interface User {
   id?: string | number;
   name: string;
@@ -83,7 +89,6 @@ interface User {
 interface FilesProps {
   currentUser: User;
 }
-
 
 const Files: React.FC<FilesProps> = ({ currentUser }) => {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -100,21 +105,21 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
   const [success, setSuccess] = useState<string | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showFolderModal, setShowFolderModal] = useState(false);
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [showRenameModal, setShowRenameModal] = useState(false);
+  const [uploadFiles, setUploadFiles] = useState<FileList | null>(null);
   const [newFolderName, setNewFolderName] = useState('');
   const [folderPath, setFolderPath] = useState<BreadcrumbItem[]>([{ name: 'Home', path: '/', id: null }]);
   const [isUploading, setIsUploading] = useState(false);
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ [key: string]: number }>({});
+  const [itemToRename, setItemToRename] = useState<FileItem | null>(null);
+  const [newName, setNewName] = useState('');
+  const [isRenaming, setIsRenaming] = useState(false);
 
+  // Get current user ID with proper fallback
+  const CURRENT_USER_ID = currentUser.id?.toString() || '1';
 
-  // Replace the hardcoded user ID with the actual current user ID
-  const CURRENT_USER_ID = currentUser.id?.toString() || '1'; // Fallback to '1' if id is missing
-
-  // Add some logging to verify the user ID
-  console.log('Current user in Files component:', currentUser);
-  console.log('Using user ID:', CURRENT_USER_ID);
-
-  // API base URL - adjust this to match your backend
+  // API base URL - make sure this matches your backend
   const API_BASE = 'http://localhost:3002/api/files';
 
   // Auto-hide messages
@@ -132,9 +137,18 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
     }
   }, [success]);
 
-  // Load files and folders
+  // Load files and folders when folder changes
   useEffect(() => {
     loadFilesAndFolders();
+  }, [currentFolder]);
+
+  // Load folder path when currentFolder changes
+  useEffect(() => {
+    if (currentFolder) {
+      loadFolderPath();
+    } else {
+      setFolderPath([{ name: 'Home', path: '/', id: null }]);
+    }
   }, [currentFolder]);
 
   const loadFilesAndFolders = async () => {
@@ -146,12 +160,14 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
         : `${API_BASE}/list`;
       
       const response = await fetch(url);
-      if (!response.ok) throw new Error('Failed to load files');
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: Failed to load files`);
+      }
       
       const data: ApiResponse = await response.json();
       
       // Transform backend data to match frontend interface
-      const transformedFiles: FileItem[] = data.files.map(file => ({
+      const transformedFiles: FileItem[] = (data.files || []).map(file => ({
         ...file,
         id: file.id,
         name: file.file_name || file.name || '',
@@ -160,22 +176,44 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
         fileType: file.file_type,
         modifiedAt: new Date(file.updated_at || file.created_at || Date.now()),
         modifiedBy: file.updated_by_name || file.created_by_name || 'Unknown',
-        isStarred: false, // You can add this to your DB schema if needed
+        isStarred: false,
       }));
 
-      const transformedFolders: FolderItem[] = data.folders.map(folder => ({
+      const transformedFolders: FolderItem[] = (data.folders || []).map(folder => ({
         ...folder,
-        modifiedAt: new Date(folder.updated_at || folder.created_at),
-        modifiedBy: folder.updated_by_name || folder.created_by_name || 'Unknown',
-        isStarred: false
+        type: 'folder' as const,
       }));
 
       setFiles(transformedFiles);
       setFolders(transformedFolders);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
+      console.error('Error loading files:', err);
+      setError(err instanceof Error ? err.message : 'An error occurred while loading files');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadFolderPath = async () => {
+    if (!currentFolder) return;
+    
+    try {
+      const response = await fetch(`${API_BASE}/path/${currentFolder}`);
+      if (!response.ok) throw new Error('Failed to load folder path');
+      
+      const data = await response.json();
+      const breadcrumbs = [
+        { name: 'Home', path: '/', id: null },
+        ...data.path.map((folder: any) => ({
+          name: folder.name,
+          path: folder.id,
+          id: folder.id
+        }))
+      ];
+      
+      setFolderPath(breadcrumbs);
+    } catch (err) {
+      console.error('Error loading folder path:', err);
     }
   };
 
@@ -222,41 +260,84 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
   }, [allItems, searchQuery, sortBy, sortOrder]);
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      setUploadFile(file);
+    const files = event.target.files;
+    if (files && files.length > 0) {
+      setUploadFiles(files);
     }
   };
 
   const handleUpload = async () => {
-    if (!uploadFile) return;
+    if (!uploadFiles || uploadFiles.length === 0) return;
 
     setIsUploading(true);
-    const formData = new FormData();
-    formData.append('file', uploadFile);
-    if (currentFolder) {
-      formData.append('folder_id', currentFolder);
-    }
-    formData.append('created_by', CURRENT_USER_ID);
+    const results = { successful: 0, failed: 0, errors: [] as any[] };
 
     try {
-      const response = await fetch(`${API_BASE}/upload`, {
-        method: 'POST',
-        body: formData
-      });
+      if (uploadFiles.length === 1) {
+        // Single file upload
+        const file = uploadFiles[0];
+        const formData = new FormData();
+        formData.append('file', file);
+        if (currentFolder) {
+          formData.append('folder_id', currentFolder);
+        }
+        formData.append('created_by', CURRENT_USER_ID);
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Upload failed');
+        const response = await fetch(`${API_BASE}/upload`, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Upload failed');
+        }
+
+        const result = await response.json();
+        setSuccess(`File "${file.name}" uploaded successfully!`);
+        results.successful = 1;
+      } else {
+        // Multiple file upload
+        const formData = new FormData();
+        Array.from(uploadFiles).forEach((file, index) => {
+          formData.append('files', file);
+        });
+        
+        if (currentFolder) {
+          formData.append('folder_id', currentFolder);
+        }
+        formData.append('created_by', CURRENT_USER_ID);
+
+        const response = await fetch(`${API_BASE}/upload/multiple`, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Upload failed');
+        }
+
+        const result = await response.json();
+        results.successful = result.totalUploaded || 0;
+        results.failed = result.totalErrors || 0;
+        results.errors = result.errors || [];
+
+        if (results.successful > 0) {
+          setSuccess(`${results.successful} file(s) uploaded successfully!`);
+        }
+        
+        if (results.errors.length > 0) {
+          setError(`${results.failed} file(s) failed to upload. Check console for details.`);
+          console.error('Upload errors:', results.errors);
+        }
       }
 
-      const result = await response.json();
-      setSuccess(`File "${uploadFile.name}" uploaded successfully!`);
-      
       setShowUploadModal(false);
-      setUploadFile(null);
+      setUploadFiles(null);
       loadFilesAndFolders();
     } catch (err) {
+      console.error('Upload error:', err);
       setError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
       setIsUploading(false);
@@ -292,9 +373,46 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
       setNewFolderName('');
       loadFilesAndFolders();
     } catch (err) {
+      console.error('Create folder error:', err);
       setError(err instanceof Error ? err.message : 'Failed to create folder');
     } finally {
       setIsCreatingFolder(false);
+    }
+  };
+
+  const handleRename = async () => {
+    if (!itemToRename || !newName.trim()) return;
+
+    setIsRenaming(true);
+    try {
+      const response = await fetch(`${API_BASE}/${itemToRename.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          new_name: newName.trim(),
+          updated_by: CURRENT_USER_ID
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to rename item');
+      }
+
+      const result = await response.json();
+      setSuccess(`"${itemToRename.name}" renamed to "${newName.trim()}" successfully!`);
+      
+      setShowRenameModal(false);
+      setItemToRename(null);
+      setNewName('');
+      loadFilesAndFolders();
+    } catch (err) {
+      console.error('Rename error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to rename item');
+    } finally {
+      setIsRenaming(false);
     }
   };
 
@@ -322,7 +440,44 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
       setSelectedFiles(prev => prev.filter(id => id !== itemId));
       loadFilesAndFolders();
     } catch (err) {
+      console.error('Delete error:', err);
       setError(err instanceof Error ? err.message : 'Failed to delete item');
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedFiles.length === 0) return;
+    if (!confirm(`Are you sure you want to delete ${selectedFiles.length} selected item(s)?`)) return;
+
+    try {
+      const response = await fetch(`${API_BASE}/bulk/delete`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          ids: selectedFiles,
+          updated_by: CURRENT_USER_ID,
+          force: false
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to delete items');
+      }
+
+      const result = await response.json();
+      setSuccess(result.message);
+      setSelectedFiles([]);
+      loadFilesAndFolders();
+
+      if (result.results?.errors?.length > 0) {
+        console.warn('Some items could not be deleted:', result.results.errors);
+      }
+    } catch (err) {
+      console.error('Bulk delete error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to delete items');
     }
   };
 
@@ -342,24 +497,21 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
       a.click();
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
+
+      setSuccess(`"${file.name}" downloaded successfully!`);
     } catch (err) {
+      console.error('Download error:', err);
       setError(err instanceof Error ? err.message : 'Download failed');
     }
   };
 
   const handleFolderClick = (folder: FileItem) => {
     if (folder.type !== 'folder') return;
-    
     setCurrentFolder(folder.id);
-    setFolderPath(prev => [...prev, { name: folder.name, path: folder.id, id: folder.id }]);
   };
 
   const handleBreadcrumbClick = (item: BreadcrumbItem) => {
-    const index = folderPath.findIndex(p => p.path === item.path);
-    if (index !== -1) {
-      setFolderPath(folderPath.slice(0, index + 1));
-      setCurrentFolder(item.id || null);
-    }
+    setCurrentFolder(item.id || null);
   };
 
   const formatFileSize = (bytes: number): string => {
@@ -383,17 +535,30 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
       return <Folder className="w-5 h-5 text-blue-500" />;
     }
     
-    switch (file.fileType) {
+    const fileType = file.fileType?.toLowerCase();
+    switch (fileType) {
       case 'jpg':
       case 'jpeg':
       case 'png':
       case 'gif':
+      case 'webp':
+      case 'bmp':
+      case 'svg':
         return <Image className="w-5 h-5 text-green-500" />;
       case 'pdf':
         return <FileText className="w-5 h-5 text-red-500" />;
       case 'doc':
       case 'docx':
         return <FileText className="w-5 h-5 text-blue-500" />;
+      case 'xls':
+      case 'xlsx':
+        return <FileText className="w-5 h-5 text-green-600" />;
+      case 'ppt':
+      case 'pptx':
+        return <FileText className="w-5 h-5 text-orange-500" />;
+      case 'txt':
+      case 'csv':
+        return <FileText className="w-5 h-5 text-gray-600" />;
       default:
         return <File className="w-5 h-5 text-gray-500" />;
     }
@@ -420,9 +585,20 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
     if (item.type === 'folder') {
       handleFolderClick(item);
     } else {
-      // For files, you might want to open a preview or download
+      // For files, you might want to open a preview or show details
       console.log('File clicked:', item);
     }
+  };
+
+  const openRenameModal = (item: FileItem) => {
+    setItemToRename(item);
+    setNewName(item.name);
+    setShowRenameModal(true);
+  };
+
+  const refresh = () => {
+    loadFilesAndFolders();
+    setSuccess('Files refreshed!');
   };
 
   return (
@@ -430,12 +606,22 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="mb-6">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Files</h1>
+          <div className="flex items-center justify-between mb-2">
+            <h1 className="text-3xl font-bold text-gray-900">Files</h1>
+            <button
+              onClick={refresh}
+              className="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+              title="Refresh"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Refresh
+            </button>
+          </div>
           
           {/* Breadcrumbs */}
           <nav className="flex items-center space-x-2 text-sm text-gray-600 mb-4">
             {folderPath.map((crumb, index) => (
-              <div key={crumb.path} className="flex items-center">
+              <div key={crumb.path || index} className="flex items-center">
                 {index === 0 && <Home className="w-4 h-4 mr-1" />}
                 <button 
                   className="hover:text-blue-600 transition-colors"
@@ -596,9 +782,7 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
                 </button>
                 <button 
                   className="flex items-center gap-2 px-3 py-1 text-sm text-red-600 hover:bg-red-50 rounded-md transition-colors"
-                  onClick={() => {
-                    selectedFiles.forEach(id => handleDelete(id));
-                  }}
+                  onClick={handleBulkDelete}
                 >
                   <Trash2 className="w-4 h-4" />
                   Delete
@@ -633,6 +817,7 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
                               setSelectedFiles([]);
                             }
                           }}
+                          checked={selectedFiles.length > 0 && selectedFiles.length === filteredAndSortedFiles.length}
                         />
                       </th>
                       <th className="text-left p-3">
@@ -662,7 +847,7 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
                           <ArrowUpDown className="w-3 h-3" />
                         </button>
                       </th>
-                      <th className="w-12 p-3">Actions</th>
+                      <th className="w-16 p-3">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -706,6 +891,13 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
                         </td>
                         <td className="p-3" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center gap-1">
+                            <button 
+                              onClick={() => openRenameModal(file)}
+                              className="p-1 hover:bg-gray-100 rounded transition-colors"
+                              title="Rename"
+                            >
+                              <Edit className="w-4 h-4 text-gray-400" />
+                            </button>
                             {file.type === 'file' && (
                               <button 
                                 onClick={() => handleDownload(file)}
@@ -742,6 +934,16 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
                       onClick={() => handleItemClick(file)}
                     >
                       <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                        <button 
+                          className="p-1 hover:bg-gray-100 rounded transition-colors"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openRenameModal(file);
+                          }}
+                          title="Rename"
+                        >
+                          <Edit className="w-4 h-4 text-gray-400" />
+                        </button>
                         {file.type === 'file' && (
                           <button 
                             className="p-1 hover:bg-gray-100 rounded transition-colors"
@@ -776,7 +978,7 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
                         />
                       </div>
 
-                      <div className="flex flex-col items-center text-center">
+                      <div className="flex flex-col items-center text-center mt-6">
                         <div className="w-12 h-12 mb-3 flex items-center justify-center">
                           {file.type === 'folder' ? (
                             <Folder className="w-10 h-10 text-blue-500" />
@@ -802,12 +1004,9 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
                           {file.size && (
                             <div>{formatFileSize(file.size)}</div>
                           )}
-                        </div>
-
-                        <div className="text-xs text-gray-500 space-y-1">
                           <div className="flex items-center justify-center gap-1">
                             <User className="w-3 h-3" />
-                            {currentUser.name}
+                            {file.modifiedBy}
                           </div>
                         </div>
                       </div>
@@ -842,11 +1041,11 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white rounded-lg p-6 w-full max-w-md">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium">Upload File</h3>
+                <h3 className="text-lg font-medium">Upload Files</h3>
                 <button 
                   onClick={() => {
                     setShowUploadModal(false);
-                    setUploadFile(null);
+                    setUploadFiles(null);
                   }}
                   className="text-gray-400 hover:text-gray-600"
                   disabled={isUploading}
@@ -858,18 +1057,26 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Select File
+                    Select Files
                   </label>
                   <input
                     type="file"
+                    multiple
                     onChange={handleFileSelect}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                     disabled={isUploading}
                   />
-                  {uploadFile && (
-                    <p className="mt-2 text-sm text-gray-600">
-                      Selected: {uploadFile.name} ({formatFileSize(uploadFile.size)})
-                    </p>
+                  {uploadFiles && uploadFiles.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {Array.from(uploadFiles).map((file, index) => (
+                        <p key={index} className="text-sm text-gray-600">
+                          {file.name} ({formatFileSize(file.size)})
+                        </p>
+                      ))}
+                      <p className="text-sm font-medium text-gray-700 mt-2">
+                        Total: {uploadFiles.length} file{uploadFiles.length > 1 ? 's' : ''}
+                      </p>
+                    </div>
                   )}
                 </div>
                 
@@ -877,7 +1084,7 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
                   <button
                     onClick={() => {
                       setShowUploadModal(false);
-                      setUploadFile(null);
+                      setUploadFiles(null);
                     }}
                     className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
                     disabled={isUploading}
@@ -886,7 +1093,7 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
                   </button>
                   <button
                     onClick={handleUpload}
-                    disabled={!uploadFile || isUploading}
+                    disabled={!uploadFiles || uploadFiles.length === 0 || isUploading}
                     className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   >
                     {isUploading ? (
@@ -897,7 +1104,7 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
                     ) : (
                       <>
                         <Upload className="w-4 h-4" />
-                        Upload
+                        Upload {uploadFiles && uploadFiles.length > 1 ? `${uploadFiles.length} Files` : 'File'}
                       </>
                     )}
                   </button>
@@ -970,6 +1177,82 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
                       <>
                         <FolderPlus className="w-4 h-4" />
                         Create
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Rename Modal */}
+        {showRenameModal && itemToRename && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 w-full max-w-md">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium">
+                  Rename {itemToRename.type === 'folder' ? 'Folder' : 'File'}
+                </h3>
+                <button 
+                  onClick={() => {
+                    setShowRenameModal(false);
+                    setItemToRename(null);
+                    setNewName('');
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                  disabled={isRenaming}
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    New Name
+                  </label>
+                  <input
+                    type="text"
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="Enter new name..."
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter' && newName.trim() && !isRenaming) {
+                        handleRename();
+                      }
+                    }}
+                    disabled={isRenaming}
+                  />
+                </div>
+                
+                <div className="flex items-center gap-3 pt-4">
+                  <button
+                    onClick={() => {
+                      setShowRenameModal(false);
+                      setItemToRename(null);
+                      setNewName('');
+                    }}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+                    disabled={isRenaming}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleRename}
+                    disabled={!newName.trim() || isRenaming}
+                    className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {isRenaming ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                        Renaming...
+                      </>
+                    ) : (
+                      <>
+                        <Edit className="w-4 h-4" />
+                        Rename
                       </>
                     )}
                   </button>

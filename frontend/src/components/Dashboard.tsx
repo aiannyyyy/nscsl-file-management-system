@@ -18,7 +18,12 @@ import {
   Activity,
   Calendar,
   User,
-  FolderPlus
+  FolderPlus,
+  Edit3,
+  Trash2,
+  Copy,
+  Move,
+  RefreshCw
 } from 'lucide-react';
 
 interface User {
@@ -45,20 +50,24 @@ interface DashboardStats {
   }>;
 }
 
-interface RecentActivity {
-  id: string;
+interface ActivityLog {
+  id: number;
+  user_id: number;
   user_name: string;
-  action: string;
-  file_name: string;
+  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'DOWNLOAD' | 'COPY' | 'MOVE' | 'RENAME';
+  target_type: 'FILE' | 'FOLDER';
+  target_id: number | null;
+  target_name: string;
+  additional_info: string | null;
   created_at: string;
-  type: 'file' | 'folder';
 }
 
 export default function Dashboard({ currentUser }: DashboardProps) {
   const navigate = useNavigate();
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [recentActivities, setRecentActivities] = useState<RecentActivity[]>([]);
+  const [recentActivities, setRecentActivities] = useState<ActivityLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activityLoading, setActivityLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const API_BASE = 'http://localhost:3002/api/files';
@@ -79,38 +88,8 @@ export default function Dashboard({ currentUser }: DashboardProps) {
         setStats(statsData);
       }
 
-      // Load recent files and folders (as activity)
-      const filesResponse = await fetch(`${API_BASE}/list`);
-      if (filesResponse.ok) {
-        const data = await filesResponse.json();
-        
-        // Combine files and folders for recent activity
-        const allItems = [
-          ...data.files.map((file: any) => ({
-            id: file.id,
-            user_name: file.created_by_name || 'Unknown',
-            action: 'uploaded',
-            file_name: file.file_name,
-            created_at: file.created_at,
-            type: 'file' as const
-          })),
-          ...data.folders.map((folder: any) => ({
-            id: folder.id,
-            user_name: folder.created_by_name || 'Unknown',
-            action: 'created',
-            file_name: folder.name,
-            created_at: folder.created_at,
-            type: 'folder' as const
-          }))
-        ];
-
-        // Sort by creation date and take the 5 most recent
-        const sortedActivities = allItems
-          .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-          .slice(0, 5);
-
-        setRecentActivities(sortedActivities);
-      }
+      // Load real activity logs
+      await loadActivityLogs();
     } catch (err) {
       console.error('Error loading dashboard data:', err);
       setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
@@ -119,28 +98,103 @@ export default function Dashboard({ currentUser }: DashboardProps) {
     }
   };
 
-  const getActivityIcon = (type: string, action: string) => {
-    if (action === 'created' || type === 'folder') {
-      return <Folder className="w-4 h-4 text-yellow-500" />;
+  const loadActivityLogs = async () => {
+    try {
+      setActivityLoading(true);
+      
+      // Fetch recent activity logs (limit to 10 most recent)
+      const response = await fetch(`${API_BASE}/activity-logs?limit=10&offset=0`);
+      if (response.ok) {
+        const data = await response.json();
+        setRecentActivities(data.logs || []);
+      } else {
+        console.error('Failed to fetch activity logs');
+      }
+    } catch (err) {
+      console.error('Error loading activity logs:', err);
+    } finally {
+      setActivityLoading(false);
     }
-    return <Upload className="w-4 h-4 text-blue-500" />;
   };
 
-  const getFileIcon = (type: string) => {
-    switch (type) {
-      case 'pdf':
-        return <FileText className="w-5 h-5 text-red-500" />;
-      case 'xlsx':
-      case 'xls':
-        return <FileText className="w-5 h-5 text-green-500" />;
-      case 'docx':
-      case 'doc':
-        return <FileText className="w-5 h-5 text-blue-500" />;
-      case 'zip':
-      case 'rar':
-        return <File className="w-5 h-5 text-purple-500" />;
+  // Get icon based on action and target type
+  const getActivityIcon = (action: string, targetType: 'FILE' | 'FOLDER') => {
+    switch (action) {
+      case 'CREATE':
+        return targetType === 'FOLDER' ? (
+          <FolderPlus className="w-4 h-4 text-green-500" />
+        ) : (
+          <Upload className="w-4 h-4 text-blue-500" />
+        );
+      case 'UPDATE':
+      case 'RENAME':
+        return <Edit3 className="w-4 h-4 text-orange-500" />;
+      case 'DELETE':
+        return <Trash2 className="w-4 h-4 text-red-500" />;
+      case 'DOWNLOAD':
+        return <Download className="w-4 h-4 text-purple-500" />;
+      case 'COPY':
+        return <Copy className="w-4 h-4 text-indigo-500" />;
+      case 'MOVE':
+        return <Move className="w-4 h-4 text-teal-500" />;
       default:
-        return <File className="w-5 h-5 text-gray-500" />;
+        return targetType === 'FOLDER' ? (
+          <Folder className="w-4 h-4 text-yellow-500" />
+        ) : (
+          <File className="w-4 h-4 text-gray-500" />
+        );
+    }
+  };
+
+  // Get action description
+  const getActionDescription = (action: string, targetType: 'FILE' | 'FOLDER', targetName: string) => {
+    const itemType = targetType.toLowerCase();
+    
+    switch (action) {
+      case 'CREATE':
+        return `created ${itemType} "${targetName}"`;
+      case 'UPDATE':
+        return `updated ${itemType} "${targetName}"`;
+      case 'RENAME':
+        return `renamed ${itemType} "${targetName}"`;
+      case 'DELETE':
+        return `deleted ${itemType} "${targetName}"`;
+      case 'DOWNLOAD':
+        return `downloaded file "${targetName}"`;
+      case 'COPY':
+        return `copied ${itemType} "${targetName}"`;
+      case 'MOVE':
+        return `moved ${itemType} "${targetName}"`;
+      default:
+        return `performed action on ${itemType} "${targetName}"`;
+    }
+  };
+
+  // Get activity badge
+  const getActivityBadge = (action: string, targetType: 'FILE' | 'FOLDER') => {
+    const getBadgeClasses = (color: string) => 
+      `text-${color}-600 text-xs ml-2 bg-${color}-100 px-2 py-1 rounded-full`;
+
+    switch (action) {
+      case 'CREATE':
+        return (
+          <span className={getBadgeClasses('green')}>
+            {targetType === 'FOLDER' ? 'Created' : 'Uploaded'}
+          </span>
+        );
+      case 'UPDATE':
+      case 'RENAME':
+        return <span className={getBadgeClasses('orange')}>Modified</span>;
+      case 'DELETE':
+        return <span className={getBadgeClasses('red')}>Deleted</span>;
+      case 'DOWNLOAD':
+        return <span className={getBadgeClasses('purple')}>Downloaded</span>;
+      case 'COPY':
+        return <span className={getBadgeClasses('indigo')}>Copied</span>;
+      case 'MOVE':
+        return <span className={getBadgeClasses('teal')}>Moved</span>;
+      default:
+        return null;
     }
   };
 
@@ -179,6 +233,10 @@ export default function Dashboard({ currentUser }: DashboardProps) {
         console.log('Reports feature coming soon');
         break;
     }
+  };
+
+  const handleRefreshActivity = async () => {
+    await loadActivityLogs();
   };
 
   if (loading) {
@@ -401,41 +459,68 @@ export default function Dashboard({ currentUser }: DashboardProps) {
         </div>
       </div>
 
-      {/* Recent Activity */}
-      <div className="grid grid-cols-1 gap-6">
+      
+      {/* Option 1: Using grid-cols-2 (half width, you can add another card later) */}
+      <div className="grid grid-cols-2 gap-6">
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-gray-900">Recent Activity</h3>
-            <button 
-              onClick={() => navigate('/files')}
-              className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-            >
-              View All Files
-            </button>
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={handleRefreshActivity}
+                disabled={activityLoading}
+                className="flex items-center gap-1 text-sm text-gray-600 hover:text-gray-800 font-medium px-2 py-1 rounded hover:bg-gray-100 disabled:opacity-50"
+                title="Refresh activities"
+              >
+                <RefreshCw className={`w-3 h-3 ${activityLoading ? 'animate-spin' : ''}`} />
+                {activityLoading ? 'Refreshing...' : 'Refresh'}
+              </button>
+              <button 
+                onClick={() => navigate('/files')}
+                className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+              >
+                View All Files
+              </button>
+            </div>
           </div>
           
-          {recentActivities.length > 0 ? (
+          {activityLoading && (
+            <div className="flex items-center justify-center py-4">
+              <RefreshCw className="w-4 h-4 animate-spin text-gray-500" />
+              <span className="ml-2 text-sm text-gray-500">Loading activities...</span>
+            </div>
+          )}
+          
+          {!activityLoading && recentActivities.length > 0 ? (
             <div className="space-y-4">
               {recentActivities.map((activity) => (
-                <div key={`${activity.type}-${activity.id}`} className="flex items-start gap-3">
+                <div key={activity.id} className="flex items-start gap-3">
                   <div className="p-1 bg-gray-50 rounded-full mt-1">
-                    {getActivityIcon(activity.type, activity.action)}
+                    {getActivityIcon(activity.action, activity.target_type)}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm text-gray-900">
-                      <span className="font-medium">{activity.user_name}</span> {activity.action}{' '}
-                      {activity.type === 'folder' ? 'folder' : 'file'}{' '}
-                      <span className="font-medium">{activity.file_name}</span>
+                      <span className="font-medium">{activity.user_name}</span>{' '}
+                      {getActionDescription(activity.action, activity.target_type, activity.target_name)}
+                      {getActivityBadge(activity.action, activity.target_type)}
                     </div>
                     <div className="flex items-center gap-1 mt-1 text-xs text-gray-500">
                       <Clock className="w-3 h-3" />
                       {formatTimeAgo(activity.created_at)}
+                      <span className="ml-2">
+                        • {activity.target_type === 'FOLDER' ? 'Folder' : 'File'}
+                      </span>
+                      {activity.additional_info && (
+                        <span className="ml-2 text-xs text-gray-400" title={activity.additional_info}>
+                          • Details available
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
               ))}
             </div>
-          ) : (
+          ) : !activityLoading && (
             <div className="text-center py-8 text-gray-500">
               <Activity className="w-12 h-12 mx-auto mb-2 text-gray-300" />
               <p>No recent activity</p>
@@ -448,6 +533,9 @@ export default function Dashboard({ currentUser }: DashboardProps) {
             </div>
           )}
         </div>
+        
+        {/* Empty space for future card or leave empty */}
+        <div className=""></div>
       </div>
     </div>
   );
