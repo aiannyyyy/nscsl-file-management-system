@@ -774,7 +774,7 @@ async function validateUser(userId) {
   console.log("🔍 Validating user ID:", userId, "Type:", typeof userId);
   
   try {
-    const [rows] = await db.promise().query("SELECT id, name FROM users WHERE id = ?", [userId]);
+    const [rows] = await db.promise().query("SELECT id, name, email FROM users WHERE id = ?", [userId]);
     console.log("📋 User validation query result:", rows);
     
     if (rows.length > 0) {
@@ -793,7 +793,7 @@ async function validateUser(userId) {
 // ================== Helper: Get User Details ==================
 async function getUserDetails(userId) {
   try {
-    const [rows] = await db.promise().query("SELECT id, name, user_name FROM users WHERE id = ?", [userId]);
+    const [rows] = await db.promise().query("SELECT id, name, user_name, email FROM users WHERE id = ?", [userId]);
     return rows.length > 0 ? rows[0] : null;
   } catch (error) {
     console.error("Error getting user details:", error);
@@ -3218,6 +3218,20 @@ router.post("/cleanup", async (req, res) => {
   } catch (err) {
     console.error("💥 Error during cleanup:", err);
     res.status(500).json({ error: "Cleanup failed: " + err.message });
+  }
+});
+
+// =================== Helper: Fetch User ==================
+// GET /api/users - Get all users for sharing
+router.get('/api/users', async (req, res) => {
+  try {
+    const [rows] = await db.promise().query(
+      "SELECT id, name, user_name, email, department, role FROM users WHERE active = 1 ORDER BY name"
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    res.status(500).json({ error: 'Failed to fetch users' });
   }
 });
 

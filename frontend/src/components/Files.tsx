@@ -29,7 +29,9 @@ import {
   Copy,
   Info,
   RefreshCw,
-  Eye
+  Eye,
+  Send,
+  Mail
 } from 'lucide-react';
 
 interface FileItem {
@@ -83,6 +85,7 @@ interface User {
   id?: string | number;
   name: string;
   user_name: string;
+  email: string;
   department?: string;
   role: string;
 }
@@ -92,44 +95,72 @@ interface FilesProps {
 }
 
 const Files: React.FC<FilesProps> = ({ currentUser }) => {
+  // View and UI State
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-  const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'date' | 'size'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [showFilters, setShowFilters] = useState(false);
+
+  // File and Folder State
+  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [currentFolder, setCurrentFolder] = useState<string | null>(null);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [folders, setFolders] = useState<FolderItem[]>([]);
+  const [folderPath, setFolderPath] = useState<BreadcrumbItem[]>([{ name: 'Home', path: '/', id: null }]);
+
+  // Search State
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Loading and Status State
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  // Modal State
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showFolderModal, setShowFolderModal] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+
+  // Upload State
   const [uploadFiles, setUploadFiles] = useState<FileList | null>(null);
-  const [newFolderName, setNewFolderName] = useState('');
-  const [folderPath, setFolderPath] = useState<BreadcrumbItem[]>([{ name: 'Home', path: '/', id: null }]);
   const [isUploading, setIsUploading] = useState(false);
-  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ [key: string]: number }>({});
+
+  // Folder Creation State
+  const [newFolderName, setNewFolderName] = useState('');
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+
+  // Rename State
   const [itemToRename, setItemToRename] = useState<FileItem | null>(null);
   const [newName, setNewName] = useState('');
   const [isRenaming, setIsRenaming] = useState(false);
-  const [showShareModal, setShowShareModal] = useState(false);
+
+  // Share State
   const [shareEmails, setShareEmails] = useState<string[]>(['']);
   const [shareMessage, setShareMessage] = useState('');
   const [isSharing, setIsSharing] = useState(false);
-  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  
+  // User Search and Selection for Sharing
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [filteredUsers, setFilteredUsers] = useState<User[]>([]);
+  const [selectedUsers, setSelectedUsers] = useState<User[]>([]);
+  const [showUserDropdown, setShowUserDropdown] = useState(false);
+  const [availableUsers, setAvailableUsers] = useState<User[]>([]);
+
+  // Preview State
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   
-
   // Get current user ID with proper fallback
   const CURRENT_USER_ID = currentUser.id?.toString() || '1';
 
   // API base URL - make sure this matches your backend
   const API_BASE = 'http://localhost:3002/api/files';
+
+  // Check if we're on the main page (home directory)
+  const isMainPage = currentFolder === null;
 
   // Auto-hide messages
   useEffect(() => {
@@ -145,6 +176,31 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
       return () => clearTimeout(timer);
     }
   }, [success]);
+
+  // Add this useEffect to load users when share modal opens
+  useEffect(() => {
+    if (showShareModal) {
+      fetchUsers();
+    }
+  }, [showShareModal]);
+
+  // Filter users based on search query
+  useEffect(() => {
+    if (userSearchQuery.trim()) {
+      const filtered = availableUsers.filter(user =>
+        user.name.toLowerCase().includes(userSearchQuery.toLowerCase()) ||
+        user.email.toLowerCase().includes(userSearchQuery.toLowerCase()) ||
+        user.user_name.toLowerCase().includes(userSearchQuery.toLowerCase()) ||
+        user.department?.toLowerCase().includes(userSearchQuery.toLowerCase())
+      ).filter(user => !selectedUsers.find(selected => selected.id === user.id));
+      
+      setFilteredUsers(filtered);
+      setShowUserDropdown(filtered.length > 0);
+    } else {
+      setFilteredUsers([]);
+      setShowUserDropdown(false);
+    }
+  }, [userSearchQuery, selectedUsers, availableUsers]);
 
   // Load files and folders when folder changes
   useEffect(() => {
@@ -223,6 +279,19 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
       setFolderPath(breadcrumbs);
     } catch (err) {
       console.error('Error loading folder path:', err);
+    }
+  };
+
+  // Add this function to fetch users from your backend
+  const fetchUsers = async () => {
+    try {
+      const response = await fetch('http://localhost:3002/api/users'); // Adjust your API endpoint
+      if (!response.ok) throw new Error('Failed to fetch users');
+      const users = await response.json();
+      setAvailableUsers(users);
+    } catch (err) {
+      console.error('Error fetching users:', err);
+      setError('Failed to load users');
     }
   };
 
@@ -518,96 +587,59 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
   };
 
   const handleFolderDownload = async (folderId: string, folderName: string) => {
-  try {
-    setSuccess('Preparing folder download...');
-    const response = await fetch(`${API_BASE}/download/folder/${folderId}`);
-    
-    if (!response.ok) throw new Error('Folder download failed');
+    try {
+      setSuccess('Preparing folder download...');
+      const response = await fetch(`${API_BASE}/download/folder/${folderId}`);
+      
+      if (!response.ok) throw new Error('Folder download failed');
 
-    const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${folderName}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${folderName}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
 
-    setSuccess(`Folder "${folderName}" downloaded as ZIP successfully!`);
-  } catch (err) {
-    console.error('Folder download error:', err);
-    setError(err instanceof Error ? err.message : 'Folder download failed');
-  }
-};
+      setSuccess(`Folder "${folderName}" downloaded as ZIP successfully!`);
+    } catch (err) {
+      console.error('Folder download error:', err);
+      setError(err instanceof Error ? err.message : 'Folder download failed');
+    }
+  };
 
-const handleBulkDownload = async () => {
-  if (selectedFiles.length === 0) return;
+  const handleBulkDownload = async () => {
+    if (selectedFiles.length === 0) return;
 
-  if (selectedFiles.length === 1) {
-    const item = allItems.find(item => item.id === selectedFiles[0]);
-    if (item) await handleDownload(item);
-  } else {
-    // Multiple items - create ZIP
-    setSuccess('Preparing bulk download...');
-    const response = await fetch(`${API_BASE}/download/bulk`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ itemIds: selectedFiles })
-    });
+    if (selectedFiles.length === 1) {
+      const item = allItems.find(item => item.id === selectedFiles[0]);
+      if (item) await handleDownload(item);
+    } else {
+      // Multiple items - create ZIP
+      setSuccess('Preparing bulk download...');
+      const response = await fetch(`${API_BASE}/download/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemIds: selectedFiles })
+      });
 
-    if (!response.ok) throw new Error('Bulk download failed');
+      if (!response.ok) throw new Error('Bulk download failed');
 
-    const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `selected_files_${new Date().toISOString().split('T')[0]}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `selected_files_${new Date().toISOString().split('T')[0]}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
 
-    setSuccess(`${selectedFiles.length} items downloaded as ZIP!`);
-  }
-};
-
-const handleShare = async () => {
-  const validEmails = shareEmails.filter(email => 
-    email.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
-  );
-  
-  if (validEmails.length === 0) {
-    setError('Please enter at least one valid email address');
-    return;
-  }
-
-  setIsSharing(true);
-  try {
-    const response = await fetch(`${API_BASE}/share`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        itemIds: selectedFiles,
-        emails: validEmails,
-        message: shareMessage.trim() || `${currentUser.name} shared files with you`,
-        sharedBy: CURRENT_USER_ID
-      })
-    });
-
-    if (!response.ok) throw new Error('Failed to share files');
-
-    setSuccess(`Files shared with ${validEmails.length} recipient(s)!`);
-    setShowShareModal(false);
-    setShareEmails(['']);
-    setShareMessage('');
-    setSelectedFiles([]);
-  } catch (err) {
-    setError('Failed to share files');
-  } finally {
-    setIsSharing(false);
-  }
-};
+      setSuccess(`${selectedFiles.length} items downloaded as ZIP!`);
+    }
+  };
 
   const handleFolderClick = (folder: FileItem) => {
     if (folder.type !== 'folder') return;
@@ -706,71 +738,162 @@ const handleShare = async () => {
   };
 
   const handleFilePreview = async (file: FileItem) => {
-  setPreviewFile(file);
-  setShowPreviewModal(true);
-};
+    setPreviewFile(file);
+    setShowPreviewModal(true);
+  };
 
-const canPreviewFile = (file: FileItem) => {
-  if (!file.fileType) return false;
-  const type = file.fileType.toLowerCase();
-  return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'pdf', 'txt', 'csv', 'json', 'xml', 'html', 'css', 'js', 'md'].includes(type);
-};
+  const canPreviewFile = (file: FileItem) => {
+    if (!file.fileType) return false;
+    const type = file.fileType.toLowerCase();
+    return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'pdf', 'txt', 'csv', 'json', 'xml', 'html', 'css', 'js', 'md'].includes(type);
+  };
 
-const renderFilePreview = () => {
-  if (!previewFile) return null;
-  
-  const fileType = previewFile.fileType?.toLowerCase();
-  const previewUrl = `${API_BASE}/preview/${previewFile.id}`;
-  
-  // Image files
-  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(fileType || '')) {
+  // Add user to selected list
+  const addUser = (user: User) => {
+    setSelectedUsers(prev => [...prev, user]);
+    setUserSearchQuery('');
+    setShowUserDropdown(false);
+  };
+
+  // Remove user from selected list
+  const removeUser = (userId: string | number) => {
+    setSelectedUsers(prev => prev.filter(user => user.id !== userId));
+  };
+
+  // Handle search input keydown
+  const handleSearchKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Backspace' && userSearchQuery === '' && selectedUsers.length > 0) {
+      removeUser(selectedUsers[selectedUsers.length - 1].id!);
+    }
+  };
+
+  // Generate mailto link for Outlook
+  const generateMailtoLink = () => {
+    const emails = selectedUsers.map(user => user.email).join(',');
+    const subject = encodeURIComponent(`Shared files from ${currentUser.name}`);
+    const fileNames = selectedFiles.map(fileId => {
+      const item = allItems.find(item => item.id === fileId);
+      return item?.name || 'file';
+    }).join(', ');
+    
+    const body = encodeURIComponent(`
+  ${shareMessage || `${currentUser.name} has shared the following files with you:`}
+
+  Files: ${fileNames}
+
+  Please check your file sharing system for access to these files.
+
+  Best regards,
+  ${currentUser.name}
+    `);
+    
+    return `mailto:${emails}?subject=${subject}&body=${body}`;
+  };
+
+  // Updated handleShare function
+  const handleShare = async (useOutlook = false) => {
+    if (selectedUsers.length === 0) {
+      setError('Please select at least one user to share with');
+      return;
+    }
+
+    if (useOutlook) {
+      // Open Outlook with mailto link
+      const mailtoLink = generateMailtoLink();
+      window.location.href = mailtoLink;
+      
+      // Close modal and reset
+      setShowShareModal(false);
+      setSelectedUsers([]);
+      setShareMessage('');
+      setSelectedFiles([]);
+      return;
+    }
+
+    // Original share functionality
+    setIsSharing(true);
+    try {
+      const response = await fetch(`${API_BASE}/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          itemIds: selectedFiles,
+          userIds: selectedUsers.map(user => user.id),
+          emails: selectedUsers.map(user => user.email),
+          message: shareMessage.trim() || `${currentUser.name} shared files with you`,
+          sharedBy: CURRENT_USER_ID
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to share files');
+
+      setSuccess(`Files shared with ${selectedUsers.length} recipient(s)!`);
+      setShowShareModal(false);
+      setSelectedUsers([]);
+      setShareMessage('');
+      setSelectedFiles([]);
+    } catch (err) {
+      setError('Failed to share files');
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
+  const renderFilePreview = () => {
+    if (!previewFile) return null;
+    
+    const fileType = previewFile.fileType?.toLowerCase();
+    const previewUrl = `${API_BASE}/preview/${previewFile.id}`;
+    
+    // Image files
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(fileType || '')) {
+      return (
+        <img 
+          src={previewUrl}
+          alt={previewFile.name}
+          className="max-w-full max-h-96 object-contain mx-auto"
+          onLoad={() => setPreviewLoading(false)}
+          onError={() => setPreviewLoading(false)}
+        />
+      );
+    }
+    
+    // PDF files
+    if (fileType === 'pdf') {
+      return (
+        <iframe
+          src={previewUrl}
+          className="w-full h-96 border-0"
+          onLoad={() => setPreviewLoading(false)}
+        />
+      );
+    }
+    
+    // Text files
+    if (['txt', 'csv', 'json', 'xml', 'html', 'css', 'js', 'md'].includes(fileType || '')) {
+      return (
+        <iframe
+          src={previewUrl}
+          className="w-full h-96 border border-gray-200 rounded"
+          onLoad={() => setPreviewLoading(false)}
+        />
+      );
+    }
+    
     return (
-      <img 
-        src={previewUrl}
-        alt={previewFile.name}
-        className="max-w-full max-h-96 object-contain mx-auto"
-        onLoad={() => setPreviewLoading(false)}
-        onError={() => setPreviewLoading(false)}
-      />
+      <div className="text-center py-8">
+        <File className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+        <p className="text-gray-600">Preview not available for this file type</p>
+        <button 
+          onClick={() => handleDownload(previewFile)}
+          className="mt-4 flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors mx-auto"
+        >
+          <Download className="w-4 h-4" />
+          Download to View
+        </button>
+      </div>
     );
-  }
-  
-  // PDF files
-  if (fileType === 'pdf') {
-    return (
-      <iframe
-        src={previewUrl}
-        className="w-full h-96 border-0"
-        onLoad={() => setPreviewLoading(false)}
-      />
-    );
-  }
-  
-  // Text files
-  if (['txt', 'csv', 'json', 'xml', 'html', 'css', 'js', 'md'].includes(fileType || '')) {
-    return (
-      <iframe
-        src={previewUrl}
-        className="w-full h-96 border border-gray-200 rounded"
-        onLoad={() => setPreviewLoading(false)}
-      />
-    );
-  }
-  
-  return (
-    <div className="text-center py-8">
-      <File className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-      <p className="text-gray-600">Preview not available for this file type</p>
-      <button 
-        onClick={() => handleDownload(previewFile)}
-        className="mt-4 flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors mx-auto"
-      >
-        <Download className="w-4 h-4" />
-        Download to View
-      </button>
-    </div>
-  );
-};
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
@@ -879,13 +1002,16 @@ const renderFilePreview = () => {
                 </button>
               </div>
               
-              <button 
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                onClick={() => setShowUploadModal(true)}
-              >
-                <Upload className="w-4 h-4" />
-                Upload
-              </button>
+              {/* Upload Button - Only show when NOT on main page */}
+              {!isMainPage && (
+                <button 
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  onClick={() => setShowUploadModal(true)}
+                >
+                  <Upload className="w-4 h-4" />
+                  Upload
+                </button>
+              )}
               
               <button 
                 className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
@@ -925,6 +1051,19 @@ const renderFilePreview = () => {
           )}
         </div>
 
+        {/* Main Page Restriction Notice */}
+        {isMainPage && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6 flex items-center gap-3">
+            <Info className="w-5 h-5 text-blue-600" />
+            <div className="flex-1">
+              <p className="text-blue-700 font-medium">Main Directory</p>
+              <p className="text-blue-600 text-sm">
+                You can only create folders in the main directory. To upload files, navigate into a folder first.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Selection Actions */}
         {selectedFiles.length > 0 && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
@@ -959,71 +1098,131 @@ const renderFilePreview = () => {
           </div>
         )}
 
-        {/* Share Modal */}
+        {/* Enhanced Share Modal */}
         {showShareModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 w-full max-w-lg">
+            <div className="bg-white rounded-lg p-6 w-full max-w-2xl">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium">Share via Email</h3>
-                <button onClick={() => setShowShareModal(false)}>
+                <h3 className="text-lg font-medium">Share Files</h3>
+                <button onClick={() => {
+                  setShowShareModal(false);
+                  setSelectedUsers([]);
+                  setShareMessage('');
+                  setUserSearchQuery('');
+                }}>
                   <X className="w-5 h-5" />
                 </button>
               </div>
               
               <div className="space-y-4">
+                {/* User Search and Selection */}
                 <div>
-                  <label className="block text-sm font-medium mb-2">Email Recipients</label>
-                  {shareEmails.map((email, index) => (
-                    <div key={index} className="flex gap-2 mb-2">
-                      <input
-                        type="email"
-                        value={email}
-                        onChange={(e) => {
-                          const newEmails = [...shareEmails];
-                          newEmails[index] = e.target.value;
-                          setShareEmails(newEmails);
-                        }}
-                        placeholder="Enter email..."
-                        className="flex-1 px-3 py-2 border rounded-lg"
-                      />
-                      {shareEmails.length > 1 && (
-                        <button onClick={() => setShareEmails(shareEmails.filter((_, i) => i !== index))}>
-                          <X className="w-4 h-4" />
-                        </button>
-                      )}
+                  <label className="block text-sm font-medium mb-2">Share with</label>
+                  <div className="relative">
+                    <div className="min-h-[42px] w-full px-3 py-2 border border-gray-300 rounded-lg focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-blue-500">
+                      <div className="flex flex-wrap gap-2 items-center">
+                        {/* Selected Users as Chips */}
+                        {selectedUsers.map((user) => (
+                          <div key={user.id} className="flex items-center gap-1 bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-sm">
+                            <User className="w-3 h-3" />
+                            <span>{user.name}</span>
+                            <button 
+                              onClick={() => removeUser(user.id!)}
+                              className="hover:bg-blue-200 rounded-full p-0.5"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                        
+                       {/* Search Input */}
+                        <input
+                          type="text"
+                          value={userSearchQuery}
+                          onChange={(e) => setUserSearchQuery(e.target.value)}
+                          onKeyDown={handleSearchKeyDown}
+                          placeholder={selectedUsers.length === 0 ? "Search by name, email, or department..." : ""}
+                          className="flex-1 min-w-[200px] outline-none bg-transparent"
+                        />
+                      </div>
                     </div>
-                  ))}
-                  <button 
-                    onClick={() => setShareEmails([...shareEmails, ''])}
-                    className="text-blue-600"
-                  >
-                    + Add email
-                  </button>
+                    
+                    {/* User Dropdown */}
+                    {showUserDropdown && (
+                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto z-10">
+                        {filteredUsers.map((user) => (
+                          <button
+                            key={user.id}
+                            onClick={() => addUser(user)}
+                            className="w-full px-3 py-2 text-left hover:bg-gray-50 flex items-center gap-3 border-b border-gray-100 last:border-b-0"
+                          >
+                            <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm font-medium">
+                              {user.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="flex-1">
+                              <div className="font-medium text-gray-900">{user.name}</div>
+                              <div className="text-sm text-gray-500">{user.email}</div>
+                              {user.department && (
+                                <div className="text-xs text-gray-400">{user.department}</div>
+                              )}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
+                {/* Message */}
                 <div>
-                  <label className="block text-sm font-medium mb-2">Message</label>
+                  <label className="block text-sm font-medium mb-2">Message (optional)</label>
                   <textarea
                     value={shareMessage}
                     onChange={(e) => setShareMessage(e.target.value)}
-                    className="w-full px-3 py-2 border rounded-lg"
+                    placeholder="Add a message to your shared files..."
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                     rows={3}
                   />
                 </div>
                 
-                <div className="flex gap-3">
+                {/* Action Buttons */}
+                <div className="flex gap-3 pt-4">
                   <button
-                    onClick={() => setShowShareModal(false)}
-                    className="flex-1 px-4 py-2 border rounded-lg"
+                    onClick={() => {
+                      setShowShareModal(false);
+                      setSelectedUsers([]);
+                      setShareMessage('');
+                      setUserSearchQuery('');
+                    }}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+                    disabled={isSharing}
                   >
                     Cancel
                   </button>
                   <button
-                    onClick={handleShare}
-                    disabled={isSharing}
-                    className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg"
+                    onClick={() => handleShare(true)}
+                    disabled={selectedUsers.length === 0}
+                    className="flex items-center gap-2 px-4 py-2 border border-blue-600 text-blue-600 rounded-lg hover:bg-blue-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {isSharing ? 'Sharing...' : 'Share'}
+                    <Mail className="w-4 h-4" />
+                    Open in Outlook
+                  </button>
+                  <button
+                    onClick={() => handleShare(false)}
+                    disabled={selectedUsers.length === 0 || isSharing}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isSharing ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                        Sharing...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4" />
+                        Share via System
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
@@ -1263,20 +1462,35 @@ const renderFilePreview = () => {
             <File className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">No files found</h3>
             <p className="text-gray-600 mb-6">
-              {searchQuery ? 'Try adjusting your search terms.' : 'Upload your first file to get started.'}
+              {searchQuery 
+                ? 'Try adjusting your search terms.' 
+                : isMainPage 
+                  ? 'Create folders to organize your files, then upload files inside them.'
+                  : 'Upload your first file to get started.'
+              }
             </p>
-            <button 
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors mx-auto"
-              onClick={() => setShowUploadModal(true)}
-            >
-              <Upload className="w-4 h-4" />
-              Upload Files
-            </button>
+            {isMainPage ? (
+              <button 
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors mx-auto"
+                onClick={() => setShowFolderModal(true)}
+              >
+                <FolderPlus className="w-4 h-4" />
+                Create Folder
+              </button>
+            ) : (
+              <button 
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors mx-auto"
+                onClick={() => setShowUploadModal(true)}
+              >
+                <Upload className="w-4 h-4" />
+                Upload Files
+              </button>
+            )}
           </div>
         )}
 
-        {/* Upload Modal */}
-        {showUploadModal && (
+        {/* Upload Modal - Only accessible when not on main page */}
+        {showUploadModal && !isMainPage && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white rounded-lg p-6 w-full max-w-md">
               <div className="flex items-center justify-between mb-4">
@@ -1500,78 +1714,78 @@ const renderFilePreview = () => {
             </div>
           </div>
         )}
-      </div>
 
-      {/* File Preview Modal */}
-      {showPreviewModal && previewFile && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between p-4 border-b">
-              <div className="flex items-center gap-3">
-                {getFileIcon(previewFile)}
-                <div>
-                  <h3 className="text-lg font-medium">{previewFile.name}</h3>
-                  <p className="text-sm text-gray-500">
-                    {previewFile.size ? formatFileSize(previewFile.size) : ''} • 
-                    Modified {formatDate(previewFile.modifiedAt)}
-                  </p>
+        {/* File Preview Modal */}
+        {showPreviewModal && previewFile && (
+          <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between p-4 border-b border-gray-200">
+                <div className="flex items-center gap-3">
+                  {getFileIcon(previewFile)}
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900">{previewFile.name}</h3>
+                    <p className="text-sm text-gray-500">
+                      {previewFile.size ? `${formatFileSize(previewFile.size)} • ` : ''}
+                      Modified {formatDate(previewFile.modifiedAt)}
+                    </p>
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button 
-                  onClick={() => handleDownload(previewFile)}
-                  className="flex items-center gap-2 px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
-                >
-                  <Download className="w-4 h-4" />
-                  Download
-                </button>
-                <button 
-                  onClick={() => {
-                    setShowPreviewModal(false);
-                    setPreviewFile(null);
-                    setPreviewLoading(false);
-                  }}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
-            </div>
-            
-            {/* Modal Content */}
-            <div className="p-4 overflow-auto max-h-[calc(90vh-80px)]">
-              {previewLoading && (
-                <div className="flex items-center justify-center py-8">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                  <span className="ml-2 text-gray-600">Loading preview...</span>
-                </div>
-              )}
-              
-              {canPreviewFile(previewFile) ? (
-                <div className="text-center">
-                  {renderFilePreview()}
-                </div>
-              ) : (
-                <div className="text-center py-8">
-                  <File className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <h4 className="text-lg font-medium text-gray-900 mb-2">Preview Not Available</h4>
-                  <p className="text-gray-600 mb-4">
-                    This file type cannot be previewed. Download the file to view its contents.
-                  </p>
-                  <button 
+               
+                <div className="flex items-center gap-2">
+                  <button
                     onClick={() => handleDownload(previewFile)}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors mx-auto"
+                    className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors"
                   >
                     <Download className="w-4 h-4" />
-                    Download File
+                    Download
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowPreviewModal(false);
+                      setPreviewFile(null);
+                      setPreviewLoading(false);
+                    }}
+                    className="p-2 text-gray-400 hover:text-gray-600 rounded-md transition-colors"
+                    aria-label="Close preview"
+                  >
+                    <X className="w-5 h-5" />
                   </button>
                 </div>
-              )}
+              </div>
+             
+              {/* Modal Content */}
+              <div className="p-6 overflow-auto max-h-[calc(90vh-120px)]">
+                {previewLoading ? (
+                  <div className="flex items-center justify-center py-12">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                    <span className="ml-3 text-gray-600">Loading preview...</span>
+                  </div>
+                ) : canPreviewFile(previewFile) ? (
+                  <div className="text-center">
+                    {renderFilePreview()}
+                  </div>
+                ) : (
+                  <div className="text-center py-12">
+                    <File className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                    <h4 className="text-xl font-semibold text-gray-900 mb-2">Preview Not Available</h4>
+                    <p className="text-gray-600 mb-6 max-w-md mx-auto">
+                      This file type cannot be previewed in the browser. Download the file to view its contents.
+                    </p>
+                    <button
+                      onClick={() => handleDownload(previewFile)}
+                      className="inline-flex items-center gap-2 px-4 py-2 text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+                    >
+                      <Download className="w-4 h-4" />
+                      Download File
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };
