@@ -1602,33 +1602,111 @@ async function getAllFilesInFolder(folderId) {
 }
 
 // ================= For FIle Preview ==================
+// ================= Fixed File Preview Route ==================
 router.get('/preview/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Use your existing db import with promisify for async/await
-    const query = util.promisify(db.query).bind(db);
+    console.log('📖 Preview request for file ID:', id);
     
-    // Query the database
-    const files = await query('SELECT * FROM files WHERE id = ?', [id]);
+    // Validate file ID
+    if (!id || !validator.isNumeric(id.toString())) {
+      console.log('❌ Invalid file ID:', id);
+      return res.status(400).json({ error: 'Invalid file ID' });
+    }
+    
+    // Get file from database
+    const [files] = await db.promise().query('SELECT * FROM files WHERE id = ?', [id]);
     
     if (!files || files.length === 0) {
-      return res.status(404).json({ error: 'File not found' });
+      console.log('❌ File not found in database:', id);
+      return res.status(404).json({ error: 'File not found in database' });
     }
     
     const fileRecord = files[0];
-    const filePath = path.join(__dirname, '../../uploads', fileRecord.file_path);
+    console.log('📋 File record:', {
+      id: fileRecord.id,
+      name: fileRecord.file_name,
+      stored_path: fileRecord.file_path,
+      size: fileRecord.file_size,
+      type: fileRecord.file_type
+    });
     
-    // Check if file exists on disk
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'File not found on disk' });
+    // Construct file path - simplified approach
+    let filePath;
+    
+    // Check if the stored path is absolute or relative
+    if (path.isAbsolute(fileRecord.file_path)) {
+      filePath = fileRecord.file_path;
+    } else {
+      // If relative, construct from project root
+      filePath = path.resolve(fileRecord.file_path);
     }
     
-    // Set content type based on file extension
-    const ext = path.extname(fileRecord.file_name).toLowerCase();
+    console.log('🔍 Checking file at path:', filePath);
+    
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      console.log('❌ File not found on disk at:', filePath);
+      
+      // Try alternative path constructions
+      const alternativePaths = [
+        path.join(process.cwd(), fileRecord.file_path),
+        path.join(process.cwd(), 'uploads', path.basename(fileRecord.file_path)),
+        path.join(__dirname, '..', fileRecord.file_path),
+        path.join(__dirname, '../uploads', path.basename(fileRecord.file_path))
+      ];
+      
+      let foundPath = null;
+      for (const altPath of alternativePaths) {
+        console.log('🔍 Trying alternative path:', altPath);
+        if (fs.existsSync(altPath)) {
+          foundPath = altPath;
+          break;
+        }
+      }
+      
+      if (!foundPath) {
+        console.log('❌ File not found in any expected location');
+        return res.status(404).json({ 
+          error: 'File not found on disk',
+          debug: {
+            storedPath: fileRecord.file_path,
+            searchedPaths: [filePath, ...alternativePaths],
+            fileName: fileRecord.file_name
+          }
+        });
+      }
+      
+      filePath = foundPath;
+      console.log('✅ Found file at alternative path:', filePath);
+    }
+    
+    // Basic path traversal security check
+    const resolvedPath = path.resolve(filePath);
+    const uploadsDir = path.resolve(process.cwd(), 'uploads');
+    
+    if (!resolvedPath.startsWith(uploadsDir) && !resolvedPath.includes('uploads')) {
+      console.log('❌ Security check failed - file outside uploads directory');
+      return res.status(403).json({ error: 'Access denied - invalid file location' });
+    }
+    
+    // Get file stats
+    const stats = fs.statSync(filePath);
+    const fileSize = stats.size;
+    
+    console.log('📊 File stats:', {
+      size: fileSize,
+      modified: stats.mtime,
+      isFile: stats.isFile()
+    });
+    
+    // Determine content type
+    const ext = path.extname(fileRecord.file_name || '').toLowerCase();
     let contentType = 'application/octet-stream';
     
     const mimeTypes = {
+      // Images
       '.jpg': 'image/jpeg',
       '.jpeg': 'image/jpeg',
       '.png': 'image/png',
@@ -1636,35 +1714,108 @@ router.get('/preview/:id', async (req, res) => {
       '.webp': 'image/webp',
       '.bmp': 'image/bmp',
       '.svg': 'image/svg+xml',
+      '.ico': 'image/x-icon',
+      
+      // Documents
       '.pdf': 'application/pdf',
-      '.txt': 'text/plain',
-      '.csv': 'text/csv',
-      '.json': 'application/json',
-      '.xml': 'text/xml',
-      '.html': 'text/html',
-      '.css': 'text/css',
-      '.js': 'text/javascript',
-      '.md': 'text/markdown'
+      '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.xls': 'application/vnd.ms-excel',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      '.ppt': 'application/vnd.ms-powerpoint',
+      '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      
+      // Text files
+      '.txt': 'text/plain; charset=utf-8',
+      '.csv': 'text/csv; charset=utf-8',
+      '.json': 'application/json; charset=utf-8',
+      '.xml': 'application/xml; charset=utf-8',
+      '.html': 'text/html; charset=utf-8',
+      '.css': 'text/css; charset=utf-8',
+      '.js': 'application/javascript; charset=utf-8',
+      '.md': 'text/markdown; charset=utf-8',
+      
+      // Video
+      '.mp4': 'video/mp4',
+      '.avi': 'video/x-msvideo',
+      '.mov': 'video/quicktime',
+      '.wmv': 'video/x-ms-wmv',
+      '.flv': 'video/x-flv',
+      '.webm': 'video/webm',
+      
+      // Audio
+      '.mp3': 'audio/mpeg',
+      '.wav': 'audio/wav',
+      '.flac': 'audio/flac',
+      '.aac': 'audio/aac',
+      '.ogg': 'audio/ogg'
     };
     
     contentType = mimeTypes[ext] || contentType;
     
-    // Set headers for inline display
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', 'inline');
+    console.log('📄 Content type determined:', contentType, 'for extension:', ext);
     
-    // Stream the file
+    // Set response headers
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Length', fileSize);
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Accept-Ranges', 'bytes');
+    
+    // Add filename header for better browser handling
+    const encodedFilename = encodeURIComponent(fileRecord.file_name);
+    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodedFilename}`);
+    
+    // Handle range requests for video/audio files
+    const range = req.headers.range;
+    if (range && (contentType.startsWith('video/') || contentType.startsWith('audio/'))) {
+      console.log('📹 Handling range request:', range);
+      
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunksize = (end - start) + 1;
+      
+      res.status(206);
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+      res.setHeader('Content-Length', chunksize);
+      
+      const stream = fs.createReadStream(filePath, { start, end });
+      stream.pipe(res);
+      return;
+    }
+    
+    // Create and pipe file stream
     const fileStream = fs.createReadStream(filePath);
+    
     fileStream.on('error', (error) => {
-      console.error('File stream error:', error);
-      res.status(500).json({ error: 'Error reading file' });
+      console.error('💥 File stream error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Error reading file: ' + error.message });
+      }
     });
     
+    fileStream.on('open', () => {
+      console.log('✅ File stream opened successfully');
+    });
+    
+    fileStream.on('end', () => {
+      console.log('✅ File preview completed');
+    });
+    
+    // Pipe the file to response
     fileStream.pipe(res);
     
   } catch (error) {
-    console.error('Preview error:', error);
-    res.status(500).json({ error: 'Failed to preview file: ' + error.message });
+    console.error('💥 Preview error:', error);
+    console.error('📋 Error stack:', error.stack);
+    
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'Failed to preview file: ' + error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
+    }
   }
 });
 
