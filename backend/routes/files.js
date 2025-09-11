@@ -748,7 +748,11 @@ const db = require("../db");
 const fs = require("fs");
 const util = require("util");
 const validator = require("validator");
+const archiver = require('archiver');
 const unlinkAsync = util.promisify(fs.unlink);
+// Instead of require('mysql2')
+const mysql = require('mysql2/promise');
+
 
 const router = express.Router();
 
@@ -1436,6 +1440,234 @@ router.get("/download/:id", async (req, res) => {
   }
 });
 
+// ================== Download Folder as Zip ==================
+// Add this route after your existing download route
+router.get("/download/folder/:id", async (req, res) => {
+  const { id } = req.params;
+  
+  console.log("\n📁 ===== DOWNLOAD FOLDER =====");
+  console.log("📁 Folder ID:", id);
+  
+  try {
+    const archiver = require('archiver');
+    const path = require('path');
+    
+    // Get folder details
+    const [folderResult] = await db.promise().query("SELECT * FROM folders WHERE id = ?", [id]);
+    
+    if (folderResult.length === 0) {
+      console.log("❌ Folder not found:", id);
+      return res.status(404).json({ error: "Folder not found" });
+    }
+
+    const folder = folderResult[0];
+    console.log("📋 Folder details:", folder.name);
+    
+    // Get all files in this folder (recursively)
+    const files = await getAllFilesInFolder(id);
+    
+    if (files.length === 0) {
+      return res.status(404).json({ error: "No files found in folder" });
+    }
+
+    // Set response headers for ZIP download
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${folder.name}.zip"`);
+    
+    // Create archive
+    const archive = archiver('zip', {
+      zlib: { level: 9 } // compression level
+    });
+
+    // Handle archive errors
+    archive.on('error', (err) => {
+      console.error("💥 Archive error:", err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Archive creation failed" });
+      }
+    });
+
+    // Pipe archive to response
+    archive.pipe(res);
+
+    // Add files to archive
+    for (const file of files) {
+      if (fs.existsSync(file.file_path)) {
+        archive.file(file.file_path, { name: file.file_name });
+      }
+    }
+
+    // Finalize the archive
+    await archive.finalize();
+    
+    console.log("✅ Folder ZIP created successfully");
+    
+  } catch (err) {
+    console.error("💥 Error creating folder ZIP:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Folder download failed: " + err.message });
+    }
+  }
+});
+
+// ================== For Bulk Download ==================
+router.post("/download/bulk", async (req, res) => {
+  const { itemIds } = req.body;
+  
+  console.log("\n📦 ===== BULK DOWNLOAD =====");
+  console.log("📦 Items:", itemIds);
+  
+  try {
+    const archiver = require('archiver');
+    
+    if (!itemIds || itemIds.length === 0) {
+      return res.status(400).json({ error: "No items selected" });
+    }
+
+    // Set response headers for ZIP download
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="selected_files.zip"`);
+    
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    
+    archive.on('error', (err) => {
+      console.error("💥 Archive error:", err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Archive creation failed" });
+      }
+    });
+
+    archive.pipe(res);
+
+    // Process each item
+    for (const itemId of itemIds) {
+      // Check if it's a file
+      const [fileResult] = await db.promise().query("SELECT * FROM files WHERE id = ?", [itemId]);
+      if (fileResult.length > 0) {
+        const file = fileResult[0];
+        if (fs.existsSync(file.file_path)) {
+          archive.file(file.file_path, { name: file.file_name });
+        }
+      } else {
+        // Check if it's a folder
+        const [folderResult] = await db.promise().query("SELECT * FROM folders WHERE id = ?", [itemId]);
+        if (folderResult.length > 0) {
+          const folderFiles = await getAllFilesInFolder(itemId);
+          const folder = folderResult[0];
+          
+          for (const file of folderFiles) {
+            if (fs.existsSync(file.file_path)) {
+              archive.file(file.file_path, { name: `${folder.name}/${file.file_name}` });
+            }
+          }
+        }
+      }
+    }
+
+    await archive.finalize();
+    console.log("✅ Bulk download ZIP created successfully");
+    
+  } catch (err) {
+    console.error("💥 Error creating bulk ZIP:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Bulk download failed: " + err.message });
+    }
+  }
+});
+
+// Helper function to get all files in a folder recursively
+async function getAllFilesInFolder(folderId) {
+  const files = [];
+  
+  // Get direct files in folder
+  const [directFiles] = await db.promise().query(
+    "SELECT * FROM files WHERE folder_id = ?", 
+    [folderId]
+  );
+  files.push(...directFiles);
+  
+  // Get subfolders
+  const [subFolders] = await db.promise().query(
+    "SELECT * FROM folders WHERE parent_id = ?", 
+    [folderId]
+  );
+  
+  // Recursively get files from subfolders
+  for (const subFolder of subFolders) {
+    const subFiles = await getAllFilesInFolder(subFolder.id);
+    files.push(...subFiles);
+  }
+  
+  return files;
+}
+
+// ================= For FIle Preview ==================
+router.get('/preview/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Use your existing db import with promisify for async/await
+    const query = util.promisify(db.query).bind(db);
+    
+    // Query the database
+    const files = await query('SELECT * FROM files WHERE id = ?', [id]);
+    
+    if (!files || files.length === 0) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    
+    const fileRecord = files[0];
+    const filePath = path.join(__dirname, '../../uploads', fileRecord.file_path);
+    
+    // Check if file exists on disk
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'File not found on disk' });
+    }
+    
+    // Set content type based on file extension
+    const ext = path.extname(fileRecord.file_name).toLowerCase();
+    let contentType = 'application/octet-stream';
+    
+    const mimeTypes = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.bmp': 'image/bmp',
+      '.svg': 'image/svg+xml',
+      '.pdf': 'application/pdf',
+      '.txt': 'text/plain',
+      '.csv': 'text/csv',
+      '.json': 'application/json',
+      '.xml': 'text/xml',
+      '.html': 'text/html',
+      '.css': 'text/css',
+      '.js': 'text/javascript',
+      '.md': 'text/markdown'
+    };
+    
+    contentType = mimeTypes[ext] || contentType;
+    
+    // Set headers for inline display
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', 'inline');
+    
+    // Stream the file
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.on('error', (error) => {
+      console.error('File stream error:', error);
+      res.status(500).json({ error: 'Error reading file' });
+    });
+    
+    fileStream.pipe(res);
+    
+  } catch (error) {
+    console.error('Preview error:', error);
+    res.status(500).json({ error: 'Failed to preview file: ' + error.message });
+  }
+});
+
 // ================== Rename/Move File or Folder ==================
 router.patch("/:id", async (req, res) => {
   const { id } = req.params;
@@ -1583,7 +1815,7 @@ async function checkCircularReference(folderId, targetParentId) {
   
   return false;
 }
-
+/*
 // ================== Delete File/Folder ==================
 router.delete("/:id", async (req, res) => {
   const { id } = req.params;
@@ -1708,7 +1940,133 @@ router.delete("/:id", async (req, res) => {
     res.status(500).json({ error: "Delete failed: " + err.message });
   }
 });
+*/
+// ================== Delete File/Folder (UPDATED) ==================
+router.delete("/:id", async (req, res) => {
+  const { id } = req.params;
+  const { updated_by, force } = req.body;
+  
+  console.log("\n🗑️ ===== DELETE REQUEST =====");
+  console.log("🆔 Item ID:", id);
+  console.log("👤 Updated by:", updated_by);
+  console.log("💪 Force delete:", force);
+  
+  try {
+    // Validate updated_by user
+    if (!updated_by) {
+      console.log("❌ Missing updated_by user ID");
+      return res.status(400).json({ error: "updated_by user ID is required" });
+    }
+    
+    console.log("🔍 Validating user...");
+    const userExists = await validateUser(updated_by);
+    if (!userExists) {
+      console.log("❌ User validation failed for ID:", updated_by);
+      return res.status(400).json({ error: "Invalid updated_by user" });
+    }
 
+    // --- Check if it's a file ---
+    console.log("🔍 Checking if item is a file...");
+    const [fileResult] = await db.promise().query("SELECT * FROM files WHERE id = ?", [id]);
+    
+    if (fileResult.length > 0) {
+      console.log("📎 Found file to delete:", fileResult[0].file_name);
+      const file = fileResult[0];
+      
+      // Delete physical file
+      if (file.file_path && fs.existsSync(file.file_path)) {
+        console.log("🗑️ Deleting physical file:", file.file_path);
+        await unlinkAsync(file.file_path);
+        console.log("✅ Physical file deleted");
+      } else {
+        console.log("⚠️ Physical file not found on disk:", file.file_path);
+      }
+      
+      // Delete database record
+      console.log("🗑️ Deleting file from database...");
+      await db.promise().query("DELETE FROM files WHERE id = ?", [id]);
+      console.log("✅ File deleted from database");
+      
+      await addActivityLog(updated_by, "delete", "file", file.id, file.file_name);
+      
+      return res.json({ 
+        message: "File deleted successfully",
+        deletedItem: {
+          type: "file",
+          id: file.id,
+          name: file.file_name
+        }
+      });
+    }
+
+    // --- Check if it's a folder ---
+    console.log("🔍 Checking if item is a folder...");
+    const [folderResult] = await db.promise().query("SELECT * FROM folders WHERE id = ?", [id]);
+    
+    if (folderResult.length > 0) {
+      console.log("📁 Found folder to delete:", folderResult[0].name);
+      const folder = folderResult[0];
+      
+      if (force) {
+        // Force delete: recursively delete all contents
+        console.log("💪 Force deleting folder with all contents...");
+        const deletedItems = await recursivelyDeleteFolder(id, updated_by);
+        
+        return res.json({
+          message: "Folder and all contents deleted successfully",
+          deletedItem: {
+            type: "folder",
+            id: folder.id,
+            name: folder.name
+          },
+          deletedContents: deletedItems
+        });
+      } else {
+        // Regular delete: check if folder is empty
+        const [containedFiles] = await db.promise().query("SELECT id, file_name FROM files WHERE folder_id = ?", [id]);
+        const [containedFolders] = await db.promise().query("SELECT id, name FROM folders WHERE parent_id = ?", [id]);
+
+        console.log("📊 Folder contents:");
+        console.log("  - Files:", containedFiles.length);
+        console.log("  - Subfolders:", containedFolders.length);
+
+        if (containedFiles.length > 0 || containedFolders.length > 0) {
+          console.log("❌ Cannot delete non-empty folder");
+          return res.status(400).json({ 
+            error: "Cannot delete non-empty folder. Use force=true to delete with contents, or delete contents first.",
+            containedFiles: containedFiles.map(f => f.file_name),
+            containedFolders: containedFolders.map(f => f.name)
+          });
+        }
+
+        console.log("🗑️ Deleting empty folder from database...");
+        await db.promise().query("DELETE FROM folders WHERE id = ?", [id]);
+        console.log("✅ Folder deleted from database");
+        
+        // Log the folder deletion AFTER getting the folder info but BEFORE deletion
+        await addActivityLog(updated_by, "delete", "folder", folder.id, folder.name);
+        
+        return res.json({ 
+          message: "Folder deleted successfully",
+          deletedItem: {
+            type: "folder",
+            id: folder.id,
+            name: folder.name
+          }
+        });
+      }
+    }
+
+    console.log("❌ Item not found (neither file nor folder)");
+    return res.status(404).json({ error: "Item not found" });
+    
+  } catch (err) {
+    console.error("💥 Error during deletion:", err);
+    console.error("📋 Error stack:", err.stack);
+    res.status(500).json({ error: "Delete failed: " + err.message });
+  }
+});
+/*
 // ================== Helper: Recursively Delete Folder ==================
 async function recursivelyDeleteFolder(folderId, deletedBy) {
   const deletedItems = { files: [], folders: [] };
@@ -1747,6 +2105,57 @@ async function recursivelyDeleteFolder(folderId, deletedBy) {
     
     const [folderInfo] = await db.promise().query("SELECT name FROM folders WHERE id = ?", [folderId]);
     const folderName = folderInfo.length > 0 ? folderInfo[0].name : `Folder ${folderId}`;
+    await addActivityLog(deletedBy, "delete", "folder", folderId, folderName, "force_delete");
+    
+  } catch (error) {
+    console.error("💥 Error in recursive delete:", error);
+    throw error;
+  }
+  
+  return deletedItems;
+}
+*/
+// ================== Helper: Recursively Delete Folder (FIXED) ==================
+async function recursivelyDeleteFolder(folderId, deletedBy) {
+  const deletedItems = { files: [], folders: [] };
+  
+  try {
+    // FIRST: Get the folder info BEFORE deleting it
+    const [folderInfo] = await db.promise().query("SELECT name FROM folders WHERE id = ?", [folderId]);
+    const folderName = folderInfo.length > 0 ? folderInfo[0].name : `Folder ${folderId}`;
+    
+    // Get all files in this folder
+    const [files] = await db.promise().query("SELECT * FROM files WHERE folder_id = ?", [folderId]);
+    
+    // Delete all files
+    for (const file of files) {
+      // Delete physical file
+      if (file.file_path && fs.existsSync(file.file_path)) {
+        await unlinkAsync(file.file_path);
+      }
+      
+      // Delete from database
+      await db.promise().query("DELETE FROM files WHERE id = ?", [file.id]);
+      
+      deletedItems.files.push({ id: file.id, name: file.file_name });
+      await addActivityLog(deletedBy, "delete", "file", file.id, file.file_name, "force_delete_folder");
+    }
+    
+    // Get all subfolders
+    const [subfolders] = await db.promise().query("SELECT * FROM folders WHERE parent_id = ?", [folderId]);
+    
+    // Recursively delete subfolders
+    for (const subfolder of subfolders) {
+      const subfolderDeleted = await recursivelyDeleteFolder(subfolder.id, deletedBy);
+      deletedItems.files.push(...subfolderDeleted.files);
+      deletedItems.folders.push(...subfolderDeleted.folders);
+      deletedItems.folders.push({ id: subfolder.id, name: subfolder.name });
+    }
+    
+    // Delete the folder itself from database
+    await db.promise().query("DELETE FROM folders WHERE id = ?", [folderId]);
+    
+    // Log the folder deletion with the correct folder name
     await addActivityLog(deletedBy, "delete", "folder", folderId, folderName, "force_delete");
     
   } catch (error) {

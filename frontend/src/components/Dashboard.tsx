@@ -117,58 +117,70 @@ export default function Dashboard({ currentUser }: DashboardProps) {
     }
   };
 
-  // Get icon based on action and target type
-  const getActivityIcon = (action: string, targetType: 'FILE' | 'FOLDER') => {
-    switch (action) {
-      case 'CREATE':
-        return targetType === 'FOLDER' ? (
-          <FolderPlus className="w-4 h-4 text-green-500" />
-        ) : (
-          <Upload className="w-4 h-4 text-blue-500" />
-        );
-      case 'UPDATE':
-      case 'RENAME':
-        return <Edit3 className="w-4 h-4 text-orange-500" />;
-      case 'DELETE':
-        return <Trash2 className="w-4 h-4 text-red-500" />;
-      case 'DOWNLOAD':
-        return <Download className="w-4 h-4 text-purple-500" />;
-      case 'COPY':
-        return <Copy className="w-4 h-4 text-indigo-500" />;
-      case 'MOVE':
-        return <Move className="w-4 h-4 text-teal-500" />;
-      default:
-        return targetType === 'FOLDER' ? (
-          <Folder className="w-4 h-4 text-yellow-500" />
-        ) : (
-          <File className="w-4 h-4 text-gray-500" />
-        );
-    }
-  };
+// Updated getActivityIcon function - removed individual colors
+const getActivityIcon = (action: string, targetType: 'FILE' | 'FOLDER') => {
+  switch (action) {
+    case 'CREATE':
+    case 'CREATED':
+      return targetType === 'FOLDER' ? (
+        <FolderPlus className="w-4 h-4" />
+      ) : (
+        <Upload className="w-4 h-4" />
+      );
+    case 'UPDATE':
+    case 'RENAME':
+      return <Edit3 className="w-4 h-4" />;
+    case 'DELETE':
+    case 'DELETED':
+      return <Trash2 className="w-4 h-4" />;
+    case 'DOWNLOAD':
+    case 'DOWNLOADED':
+      return <Download className="w-4 h-4" />;
+    case 'UPLOAD':
+    case 'UPLOADED':
+      return <Upload className="w-4 h-4" />;
+    case 'COPY':
+      return <Copy className="w-4 h-4" />;
+    case 'MOVE':
+      return <Move className="w-4 h-4" />;
+    default:
+      return targetType === 'FOLDER' ? (
+        <Folder className="w-4 h-4" />
+      ) : (
+        <File className="w-4 h-4" />
+      );
+  }
+};
 
-  // Get action description
-  const getActionDescription = (action: string, targetType: 'FILE' | 'FOLDER', targetName: string) => {
-    const itemType = targetType.toLowerCase();
-    
-    switch (action) {
-      case 'CREATE':
-        return `created ${itemType} "${targetName}"`;
-      case 'UPDATE':
-        return `updated ${itemType} "${targetName}"`;
-      case 'RENAME':
-        return `renamed ${itemType} "${targetName}"`;
-      case 'DELETE':
-        return `deleted ${itemType} "${targetName}"`;
-      case 'DOWNLOAD':
-        return `downloaded file "${targetName}"`;
-      case 'COPY':
-        return `copied ${itemType} "${targetName}"`;
-      case 'MOVE':
-        return `moved ${itemType} "${targetName}"`;
-      default:
-        return `performed action on ${itemType} "${targetName}"`;
-    }
-  };
+// Updated getActionDescription function - handles both formats
+const getActionDescription = (action: string, targetType: 'FILE' | 'FOLDER', targetName: string) => {
+  const itemType = targetType.toLowerCase();
+  
+  switch (action) {
+    case 'CREATE':
+    case 'CREATED':
+      return `created ${itemType} "${targetName}"`;
+    case 'UPDATE':
+      return `updated ${itemType} "${targetName}"`;
+    case 'RENAME':
+      return `renamed ${itemType} "${targetName}"`;
+    case 'DELETE':
+    case 'DELETED':
+      return `deleted ${itemType} "${targetName}"`;
+    case 'DOWNLOAD':
+    case 'DOWNLOADED':
+      return `downloaded file "${targetName}"`;
+    case 'UPLOAD':
+    case 'UPLOADED':
+      return `uploaded file "${targetName}"`;
+    case 'COPY':
+      return `copied ${itemType} "${targetName}"`;
+    case 'MOVE':
+      return `moved ${itemType} "${targetName}"`;
+    default:
+      return `performed action on ${itemType} "${targetName}"`;
+  }
+};
 
   // Get activity badge
   const getActivityBadge = (action: string, targetType: 'FILE' | 'FOLDER') => {
@@ -461,7 +473,7 @@ export default function Dashboard({ currentUser }: DashboardProps) {
       
       {/* Recent Activity - Real Time with Scrollable Content */}
       <div className="grid grid-cols-2 gap-6">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 h-96">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 h-100">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-gray-900">Recent Activity</h3>
             <div className="flex items-center gap-2">
@@ -492,18 +504,61 @@ export default function Dashboard({ currentUser }: DashboardProps) {
               </div>
             )}
             
-            {!activityLoading && recentActivities.length > 0 ? (
+            {!activityLoading && recentActivities.length > 0 && (
               <div className="space-y-4 pr-2">
                 {recentActivities.map((activity) => (
                   <div key={activity.id} className="flex items-start gap-3">
-                    <div className="p-1 bg-gray-50 rounded-full mt-1 flex-shrink-0">
+                    <div className={`p-1.5 rounded-full mt-1 flex-shrink-0 ${
+                      activity.action === 'DELETE' || activity.action === 'DELETED'
+                        ? 'bg-red-100' 
+                        : activity.action === 'CREATE' || activity.action === 'CREATED' || activity.action === 'UPLOAD' || activity.action === 'UPLOADED'
+                        ? 'bg-green-100'
+                        : activity.action === 'DOWNLOAD' || activity.action === 'DOWNLOADED'
+                        ? 'bg-blue-100'
+                        : activity.action === 'UPDATE' || activity.action === 'RENAME'
+                        ? 'bg-orange-100'
+                        : activity.action === 'COPY'
+                        ? 'bg-indigo-100'
+                        : activity.action === 'MOVE'
+                        ? 'bg-teal-100'
+                        : 'bg-gray-100'
+                    }`}>
                       {getActivityIcon(activity.action, activity.target_type)}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="text-sm text-gray-900">
                         <span className="font-medium">{activity.user_name}</span>{' '}
                         {getActionDescription(activity.action, activity.target_type, activity.target_name)}
-                        {getActivityBadge(activity.action, activity.target_type)}
+                        {' '}
+                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                          activity.action === 'DELETE' || activity.action === 'DELETED'
+                            ? 'bg-red-100 text-red-700' 
+                            : activity.action === 'CREATE' || activity.action === 'CREATED'
+                            ? 'bg-green-100 text-green-700'
+                            : activity.action === 'UPLOAD' || activity.action === 'UPLOADED'
+                            ? 'bg-green-100 text-green-700'
+                            : activity.action === 'DOWNLOAD' || activity.action === 'DOWNLOADED'
+                            ? 'bg-blue-100 text-blue-700'
+                            : activity.action === 'UPDATE'
+                            ? 'bg-orange-100 text-orange-700'
+                            : activity.action === 'RENAME'
+                            ? 'bg-orange-100 text-orange-700'
+                            : activity.action === 'COPY'
+                            ? 'bg-indigo-100 text-indigo-700'
+                            : activity.action === 'MOVE'
+                            ? 'bg-teal-100 text-teal-700'
+                            : 'bg-gray-100 text-gray-700'
+                        }`}>
+                          {activity.action === 'DELETE' || activity.action === 'DELETED' ? 'Deleted' : 
+                          activity.action === 'UPLOAD' || activity.action === 'UPLOADED' ? 'Uploaded' :
+                          activity.action === 'CREATE' || activity.action === 'CREATED' ? 'Created' :
+                          activity.action === 'DOWNLOAD' || activity.action === 'DOWNLOADED' ? 'Downloaded' : 
+                          activity.action === 'UPDATE' ? 'Updated' :
+                          activity.action === 'RENAME' ? 'Renamed' :
+                          activity.action === 'COPY' ? 'Copied' :
+                          activity.action === 'MOVE' ? 'Moved' :
+                          activity.action}
+                        </span>
                       </div>
                       <div className="flex items-center gap-1 mt-1 text-xs text-gray-500 flex-wrap">
                         <Clock className="w-3 h-3 flex-shrink-0" />
@@ -511,17 +566,14 @@ export default function Dashboard({ currentUser }: DashboardProps) {
                         <span className="ml-2">
                           • {activity.target_type === 'FOLDER' ? 'Folder' : 'File'}
                         </span>
-                        {activity.additional_info && (
-                          <span className="ml-2 text-xs text-gray-400" title={activity.additional_info}>
-                            • Details available
-                          </span>
-                        )}
                       </div>
                     </div>
                   </div>
                 ))}
               </div>
-            ) : !activityLoading && (
+            )}
+
+            {!activityLoading && recentActivities.length === 0 && (
               <div className="text-center py-8 text-gray-500 h-full flex flex-col justify-center">
                 <Activity className="w-12 h-12 mx-auto mb-2 text-gray-300" />
                 <p>No recent activity</p>

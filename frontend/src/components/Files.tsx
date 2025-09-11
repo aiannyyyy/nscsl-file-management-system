@@ -28,7 +28,8 @@ import {
   Move,
   Copy,
   Info,
-  RefreshCw
+  RefreshCw,
+  Eye
 } from 'lucide-react';
 
 interface FileItem {
@@ -115,6 +116,14 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
   const [itemToRename, setItemToRename] = useState<FileItem | null>(null);
   const [newName, setNewName] = useState('');
   const [isRenaming, setIsRenaming] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareEmails, setShareEmails] = useState<string[]>(['']);
+  const [shareMessage, setShareMessage] = useState('');
+  const [isSharing, setIsSharing] = useState(false);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  
 
   // Get current user ID with proper fallback
   const CURRENT_USER_ID = currentUser.id?.toString() || '1';
@@ -482,7 +491,10 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
   };
 
   const handleDownload = async (file: FileItem) => {
-    if (file.type === 'folder') return;
+    if (file.type === 'folder') {
+      // Download folder as ZIP
+      return handleFolderDownload(file.id, file.name);
+    }
 
     try {
       const response = await fetch(`${API_BASE}/download/${file.id}`);
@@ -504,6 +516,98 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
       setError(err instanceof Error ? err.message : 'Download failed');
     }
   };
+
+  const handleFolderDownload = async (folderId: string, folderName: string) => {
+  try {
+    setSuccess('Preparing folder download...');
+    const response = await fetch(`${API_BASE}/download/folder/${folderId}`);
+    
+    if (!response.ok) throw new Error('Folder download failed');
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${folderName}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+
+    setSuccess(`Folder "${folderName}" downloaded as ZIP successfully!`);
+  } catch (err) {
+    console.error('Folder download error:', err);
+    setError(err instanceof Error ? err.message : 'Folder download failed');
+  }
+};
+
+const handleBulkDownload = async () => {
+  if (selectedFiles.length === 0) return;
+
+  if (selectedFiles.length === 1) {
+    const item = allItems.find(item => item.id === selectedFiles[0]);
+    if (item) await handleDownload(item);
+  } else {
+    // Multiple items - create ZIP
+    setSuccess('Preparing bulk download...');
+    const response = await fetch(`${API_BASE}/download/bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ itemIds: selectedFiles })
+    });
+
+    if (!response.ok) throw new Error('Bulk download failed');
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `selected_files_${new Date().toISOString().split('T')[0]}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+
+    setSuccess(`${selectedFiles.length} items downloaded as ZIP!`);
+  }
+};
+
+const handleShare = async () => {
+  const validEmails = shareEmails.filter(email => 
+    email.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+  );
+  
+  if (validEmails.length === 0) {
+    setError('Please enter at least one valid email address');
+    return;
+  }
+
+  setIsSharing(true);
+  try {
+    const response = await fetch(`${API_BASE}/share`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        itemIds: selectedFiles,
+        emails: validEmails,
+        message: shareMessage.trim() || `${currentUser.name} shared files with you`,
+        sharedBy: CURRENT_USER_ID
+      })
+    });
+
+    if (!response.ok) throw new Error('Failed to share files');
+
+    setSuccess(`Files shared with ${validEmails.length} recipient(s)!`);
+    setShowShareModal(false);
+    setShareEmails(['']);
+    setShareMessage('');
+    setSelectedFiles([]);
+  } catch (err) {
+    setError('Failed to share files');
+  } finally {
+    setIsSharing(false);
+  }
+};
 
   const handleFolderClick = (folder: FileItem) => {
     if (folder.type !== 'folder') return;
@@ -585,8 +689,8 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
     if (item.type === 'folder') {
       handleFolderClick(item);
     } else {
-      // For files, you might want to open a preview or show details
-      console.log('File clicked:', item);
+      // For files, open preview modal
+      handleFilePreview(item);
     }
   };
 
@@ -600,6 +704,73 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
     loadFilesAndFolders();
     setSuccess('Files refreshed!');
   };
+
+  const handleFilePreview = async (file: FileItem) => {
+  setPreviewFile(file);
+  setShowPreviewModal(true);
+};
+
+const canPreviewFile = (file: FileItem) => {
+  if (!file.fileType) return false;
+  const type = file.fileType.toLowerCase();
+  return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'pdf', 'txt', 'csv', 'json', 'xml', 'html', 'css', 'js', 'md'].includes(type);
+};
+
+const renderFilePreview = () => {
+  if (!previewFile) return null;
+  
+  const fileType = previewFile.fileType?.toLowerCase();
+  const previewUrl = `${API_BASE}/preview/${previewFile.id}`;
+  
+  // Image files
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(fileType || '')) {
+    return (
+      <img 
+        src={previewUrl}
+        alt={previewFile.name}
+        className="max-w-full max-h-96 object-contain mx-auto"
+        onLoad={() => setPreviewLoading(false)}
+        onError={() => setPreviewLoading(false)}
+      />
+    );
+  }
+  
+  // PDF files
+  if (fileType === 'pdf') {
+    return (
+      <iframe
+        src={previewUrl}
+        className="w-full h-96 border-0"
+        onLoad={() => setPreviewLoading(false)}
+      />
+    );
+  }
+  
+  // Text files
+  if (['txt', 'csv', 'json', 'xml', 'html', 'css', 'js', 'md'].includes(fileType || '')) {
+    return (
+      <iframe
+        src={previewUrl}
+        className="w-full h-96 border border-gray-200 rounded"
+        onLoad={() => setPreviewLoading(false)}
+      />
+    );
+  }
+  
+  return (
+    <div className="text-center py-8">
+      <File className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+      <p className="text-gray-600">Preview not available for this file type</p>
+      <button 
+        onClick={() => handleDownload(previewFile)}
+        className="mt-4 flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors mx-auto"
+      >
+        <Download className="w-4 h-4" />
+        Download to View
+      </button>
+    </div>
+  );
+};
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
@@ -764,19 +935,15 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
               <div className="flex items-center gap-2">
                 <button 
                   className="flex items-center gap-2 px-3 py-1 text-sm text-blue-700 hover:bg-blue-100 rounded-md transition-colors"
-                  onClick={() => {
-                    selectedFiles.forEach(id => {
-                      const item = allItems.find(f => f.id === id);
-                      if (item && item.type === 'file') {
-                        handleDownload(item);
-                      }
-                    });
-                  }}
+                  onClick={handleBulkDownload}
                 >
                   <Download className="w-4 h-4" />
                   Download
                 </button>
-                <button className="flex items-center gap-2 px-3 py-1 text-sm text-blue-700 hover:bg-blue-100 rounded-md transition-colors">
+                <button 
+                  className="flex items-center gap-2 px-3 py-1 text-sm text-blue-700 hover:bg-blue-100 rounded-md transition-colors"
+                  onClick={() => setShowShareModal(true)}
+                >
                   <Share2 className="w-4 h-4" />
                   Share
                 </button>
@@ -787,6 +954,78 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
                   <Trash2 className="w-4 h-4" />
                   Delete
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Share Modal */}
+        {showShareModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 w-full max-w-lg">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium">Share via Email</h3>
+                <button onClick={() => setShowShareModal(false)}>
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2">Email Recipients</label>
+                  {shareEmails.map((email, index) => (
+                    <div key={index} className="flex gap-2 mb-2">
+                      <input
+                        type="email"
+                        value={email}
+                        onChange={(e) => {
+                          const newEmails = [...shareEmails];
+                          newEmails[index] = e.target.value;
+                          setShareEmails(newEmails);
+                        }}
+                        placeholder="Enter email..."
+                        className="flex-1 px-3 py-2 border rounded-lg"
+                      />
+                      {shareEmails.length > 1 && (
+                        <button onClick={() => setShareEmails(shareEmails.filter((_, i) => i !== index))}>
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <button 
+                    onClick={() => setShareEmails([...shareEmails, ''])}
+                    className="text-blue-600"
+                  >
+                    + Add email
+                  </button>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-2">Message</label>
+                  <textarea
+                    value={shareMessage}
+                    onChange={(e) => setShareMessage(e.target.value)}
+                    className="w-full px-3 py-2 border rounded-lg"
+                    rows={3}
+                  />
+                </div>
+                
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setShowShareModal(false)}
+                    className="flex-1 px-4 py-2 border rounded-lg"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleShare}
+                    disabled={isSharing}
+                    className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg"
+                  >
+                    {isSharing ? 'Sharing...' : 'Share'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1262,6 +1501,77 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
           </div>
         )}
       </div>
+
+      {/* File Preview Modal */}
+      {showPreviewModal && previewFile && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b">
+              <div className="flex items-center gap-3">
+                {getFileIcon(previewFile)}
+                <div>
+                  <h3 className="text-lg font-medium">{previewFile.name}</h3>
+                  <p className="text-sm text-gray-500">
+                    {previewFile.size ? formatFileSize(previewFile.size) : ''} • 
+                    Modified {formatDate(previewFile.modifiedAt)}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => handleDownload(previewFile)}
+                  className="flex items-center gap-2 px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                >
+                  <Download className="w-4 h-4" />
+                  Download
+                </button>
+                <button 
+                  onClick={() => {
+                    setShowPreviewModal(false);
+                    setPreviewFile(null);
+                    setPreviewLoading(false);
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+            
+            {/* Modal Content */}
+            <div className="p-4 overflow-auto max-h-[calc(90vh-80px)]">
+              {previewLoading && (
+                <div className="flex items-center justify-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                  <span className="ml-2 text-gray-600">Loading preview...</span>
+                </div>
+              )}
+              
+              {canPreviewFile(previewFile) ? (
+                <div className="text-center">
+                  {renderFilePreview()}
+                </div>
+              ) : (
+                <div className="text-center py-8">
+                  <File className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                  <h4 className="text-lg font-medium text-gray-900 mb-2">Preview Not Available</h4>
+                  <p className="text-gray-600 mb-4">
+                    This file type cannot be previewed. Download the file to view its contents.
+                  </p>
+                  <button 
+                    onClick={() => handleDownload(previewFile)}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors mx-auto"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download File
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
