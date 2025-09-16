@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { Link, useLocation } from "react-router-dom";
 import {
   Menu,
   X,
@@ -12,16 +13,16 @@ import {
   ChevronDown,
   Building2,
   HelpCircle,
-  LogOut,
-  BookOpen
+  LogOut
 } from "lucide-react";
 
 interface User {
+  id?: string | number;
   name: string;
   user_name: string;
   department?: string;
   role: string;
-  email: string; // Added email field
+  email?: string; // Made optional to match App.tsx interface
 }
 
 interface UserData {
@@ -31,13 +32,20 @@ interface UserData {
 
 type LayoutProps = {
   children: React.ReactNode;
-  userData: UserData | null;
+  userData: UserData;
   onLogout: () => void;
 };
 
 export default function Layout({ children, userData, onLogout }: LayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const location = useLocation();
+
+  // Ensure component is mounted before using location
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const toggleSidebar = () => {
     setSidebarCollapsed(!sidebarCollapsed);
@@ -49,21 +57,36 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
   };
 
   const isActive = (path: string) => {
-    return window.location.pathname === path;
+    if (!mounted) return false;
+    return location.pathname === path;
   };
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = () => {
+      if (userDropdownOpen) {
+        setUserDropdownOpen(false);
+      }
+    };
+
+    if (userDropdownOpen) {
+      document.addEventListener('click', handleClickOutside);
+      return () => document.removeEventListener('click', handleClickOutside);
+    }
+  }, [userDropdownOpen]);
 
   const navItems = [
     { path: "/dashboard", label: "Dashboard", icon: Home },
     { path: "/files", label: "Files", icon: FileText },
     { path: "/categories", label: "Categories", icon: FolderOpen },
-    { path: "/categoriesFiles", label: "Categories Files", icon: BookOpen },
     { path: "/settings", label: "Settings", icon: Settings }
   ];
 
-  // Get user display name and email
+  // Safely get user display information
   const displayName = userData?.user?.name || "Unknown User";
-  const displayEmail = userData?.user?.email || "No email";
+  const displayEmail = userData?.user?.email || userData?.user?.user_name || "No email";
   const displayRole = userData?.user?.role || "User";
+  const displayDepartment = userData?.user?.department || "";
 
   return (
     <div className="flex h-screen bg-gray-100">
@@ -71,7 +94,7 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
       <aside
         className={`${
           sidebarCollapsed ? "w-16" : "w-64"
-        } bg-blue-700 text-white flex flex-col transition-all duration-300 ease-in-out relative`}
+        } bg-blue-700 text-white flex flex-col transition-all duration-300 ease-in-out relative z-50`}
       >
         {/* Logo/Brand Section */}
         <div className="p-4 border-b border-blue-600 flex items-center justify-between">
@@ -97,9 +120,9 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
           {navItems.map((item) => {
             const Icon = item.icon;
             return (
-              <a
+              <Link
                 key={item.path}
-                href={item.path}
+                to={item.path}
                 className={`flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200 group relative ${
                   isActive(item.path)
                     ? "bg-blue-600 text-white shadow-sm"
@@ -116,7 +139,7 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
                     {item.label}
                   </div>
                 )}
-              </a>
+              </Link>
             );
           })}
         </nav>
@@ -130,7 +153,9 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-white truncate">{displayName}</div>
-                <div className="text-blue-200 text-xs truncate">{displayRole}</div>
+                <div className="text-blue-200 text-xs truncate">
+                  {displayDepartment ? `${displayRole} • ${displayDepartment}` : displayRole}
+                </div>
               </div>
             </div>
           </div>
@@ -140,7 +165,7 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top Header */}
-        <header className="h-16 bg-white shadow-sm border-b border-gray-200 flex items-center justify-between px-6">
+        <header className="h-16 bg-white shadow-sm border-b border-gray-200 flex items-center justify-between px-6 relative z-40">
           <div className="flex items-center gap-4">
             {/* Sidebar Toggle Button */}
             <button
@@ -189,7 +214,10 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
             {/* User Menu */}
             <div className="relative">
               <button
-                onClick={() => setUserDropdownOpen(!userDropdownOpen)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setUserDropdownOpen(!userDropdownOpen);
+                }}
                 className="flex items-center gap-3 p-2 hover:bg-gray-100 rounded-lg transition-colors duration-200"
               >
                 <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
@@ -199,7 +227,7 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
                   <div className="text-sm font-medium text-gray-900">{displayName}</div>
                   <div className="text-xs text-gray-500">{displayRole}</div>
                 </div>
-                <ChevronDown className="w-4 h-4 text-gray-400" />
+                <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${userDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
 
               {/* User Dropdown */}
@@ -208,7 +236,9 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
                   <div className="px-4 py-2 border-b border-gray-100">
                     <div className="text-sm font-medium text-gray-900">{displayName}</div>
                     <div className="text-xs text-gray-500">{displayEmail}</div>
-                    <div className="text-xs text-gray-400 mt-1">{displayRole}</div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      {displayDepartment ? `${displayRole} • ${displayDepartment}` : displayRole}
+                    </div>
                   </div>
                   
                   <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
@@ -238,7 +268,7 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
 
         {/* Page content */}
         <main className="flex-1 p-6 overflow-y-auto bg-gray-50">
-          <div className={`transition-all duration-300 ${sidebarCollapsed ? 'max-w-full' : 'max-w-full'}`}>
+          <div className="max-w-full">
             {children}
           </div>
         </main>
@@ -247,16 +277,8 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
       {/* Mobile Sidebar Overlay */}
       {!sidebarCollapsed && (
         <div
-          className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
+          className="fixed inset-0 bg-black bg-opacity-50 z-30 lg:hidden"
           onClick={toggleSidebar}
-        />
-      )}
-      
-      {/* Click outside to close user dropdown */}
-      {userDropdownOpen && (
-        <div
-          className="fixed inset-0 z-30"
-          onClick={() => setUserDropdownOpen(false)}
         />
       )}
     </div>

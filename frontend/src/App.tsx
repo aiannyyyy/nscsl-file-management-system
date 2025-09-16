@@ -159,13 +159,12 @@ export default function App() {
 }
 
 */
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { createBrowserRouter, RouterProvider, Navigate, Outlet } from "react-router-dom";
 import Layout from "./components/Layout";
 import Dashboard from "./components/Dashboard";
 import Files from "./components/Files";
 import Categories from "./components/Categories";
-import CategoryFiles from "./components/CategoryFiles";
 import Login from "./components/Login";
 
 interface User {
@@ -210,7 +209,7 @@ function ProtectedRoute({ userData, onLogout, children }: {
 }
 
 // Root Layout Component
-function RootLayout({ userData, onLogout }: { userData: UserData; onLogout: () => void }) {
+function RootLayout() {
   return <Outlet />;
 }
 
@@ -221,11 +220,11 @@ export default function App() {
 
   // Check for existing token on app load
   useEffect(() => {
-    const token = localStorage.getItem('authToken');
-    const storedUser = localStorage.getItem('userData');
-    
-    if (token && storedUser) {
-      try {
+    try {
+      const token = localStorage.getItem('authToken');
+      const storedUser = localStorage.getItem('userData');
+      
+      if (token && storedUser) {
         const parsedUser = JSON.parse(storedUser);
         
         // Validate that the stored data has required fields
@@ -238,13 +237,14 @@ export default function App() {
           localStorage.removeItem('authToken');
           localStorage.removeItem('userData');
         }
-      } catch (error) {
-        console.log('Error parsing stored user data, clearing...');
-        localStorage.removeItem('authToken');
-        localStorage.removeItem('userData');
       }
+    } catch (error) {
+      console.log('Error parsing stored user data, clearing...', error);
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('userData');
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   }, []);
 
   const handleLoginSuccess = (userData: UserData) => {
@@ -253,16 +253,75 @@ export default function App() {
     setIsAuthenticated(true);
     
     // Store in localStorage for persistence
-    localStorage.setItem('authToken', userData.token);
-    localStorage.setItem('userData', JSON.stringify(userData.user));
+    try {
+      localStorage.setItem('authToken', userData.token);
+      localStorage.setItem('userData', JSON.stringify(userData.user));
+    } catch (error) {
+      console.error('Failed to store user data:', error);
+    }
   };
 
   const handleLogout = () => {
     setIsAuthenticated(false);
     setUserData(null);
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('userData');
+    try {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('userData');
+    } catch (error) {
+      console.error('Failed to clear user data:', error);
+    }
   };
+
+  // Memoize router to prevent recreation on every render
+  const router = useMemo(() => {
+    if (!userData) return null;
+    
+    return createBrowserRouter([
+      {
+        path: "/",
+        element: <RootLayout />,
+        errorElement: <ErrorPage />,
+        children: [
+          {
+            index: true,
+            element: <Navigate to="/dashboard" replace />,
+          },
+          {
+            path: "dashboard",
+            element: (
+              <ProtectedRoute userData={userData} onLogout={handleLogout}>
+                <Dashboard currentUser={userData.user} />
+              </ProtectedRoute>
+            ),
+          },
+          {
+            path: "files",
+            element: (
+              <ProtectedRoute userData={userData} onLogout={handleLogout}>
+                <Files currentUser={userData.user} />
+              </ProtectedRoute>
+            ),
+          },
+          {
+            path: "categories",
+            element: (
+              <ProtectedRoute userData={userData} onLogout={handleLogout}>
+                <Categories currentUser={userData.user} />
+              </ProtectedRoute>
+            ),
+          },
+          {
+            path: "settings",
+            element: (
+              <ProtectedRoute userData={userData} onLogout={handleLogout}>
+                <Settings />
+              </ProtectedRoute>
+            ),
+          },
+        ],
+      },
+    ]);
+  }, [userData]);
 
   // Show loading spinner while checking auth
   if (isLoading) {
@@ -274,64 +333,9 @@ export default function App() {
   }
 
   // If not authenticated, show login
-  if (!isAuthenticated || !userData) {
+  if (!isAuthenticated || !userData || !router) {
     return <Login onLoginSuccess={handleLoginSuccess} />;
   }
-
-  // Define authenticated routes - create router only when authenticated
-  const router = createBrowserRouter([
-    {
-      path: "/",
-      element: <RootLayout userData={userData} onLogout={handleLogout} />,
-      errorElement: <ErrorPage />,
-      children: [
-        {
-          index: true,
-          element: <Navigate to="/dashboard" replace />,
-        },
-        {
-          path: "dashboard",
-          element: (
-            <ProtectedRoute userData={userData} onLogout={handleLogout}>
-              <Dashboard currentUser={userData.user} />
-            </ProtectedRoute>
-          ),
-        },
-        {
-          path: "files",
-          element: (
-            <ProtectedRoute userData={userData} onLogout={handleLogout}>
-              <Files currentUser={userData.user} />
-            </ProtectedRoute>
-          ),
-        },
-        {
-          path: "categories",
-          element: (
-            <ProtectedRoute userData={userData} onLogout={handleLogout}>
-              <Categories />
-            </ProtectedRoute>
-          ),
-        },
-        {
-          path: "categoriesFiles",
-          element: (
-            <ProtectedRoute userData={userData} onLogout={handleLogout}>
-              <CategoryFiles />
-            </ProtectedRoute>
-          ),
-        },
-        {
-          path: "settings",
-          element: (
-            <ProtectedRoute userData={userData} onLogout={handleLogout}>
-              <Settings />
-            </ProtectedRoute>
-          ),
-        },
-      ],
-    },
-  ]);
 
   return <RouterProvider router={router} />;
 }
