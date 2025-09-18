@@ -1,30 +1,25 @@
 const express = require('express');
-const multer = require('multer');
 const path = require('path');
 const db = require('../db');
 const fs = require('fs');
 const util = require('util');
 const validator = require('validator');
-const archiver = require('archiver');
 const unlinkAsync = util.promisify(fs.unlink);
-//instead of requuire ('mtsql2')
 const mysql = require('mysql2/promise');
-const { route } = require('./files');
+
+// Import centralized multer config
+const { 
+  uploadMultiple, 
+  uploadSingle,  // Added this import
+  handleMulterError, 
+  formatFileSize, 
+  validateFileType, 
+  validateFilePath, 
+  cleanupFiles,
+  MAX_FILES_PER_REQUEST 
+} = require('../config/multerConfig.js');
 
 const router = express.Router();
-
-// == Security Condiguration ==================
-const ALLOWED_FILE_TYPES = [
-  'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', // Images
-  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', // Documents
-  'txt', 'csv', 'json', 'xml', 'html', 'css', 'js', // Text files
-  'mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', // Video
-  'mp3', 'wav', 'flac', 'aac', 'ogg', // Audio
-  'zip', 'rar', '7z', 'tar', 'gz' // Archives
-];
-
-const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
-const MAX_FILES_PER_REQUEST = 10; // 10 files
 
 // ========= Helper Validate User =============
 async function validateUser(userId) {
@@ -58,32 +53,10 @@ async function getUserDetails(userId) {
     }
 }
 
-// ========== Helper: Get Validate File Path ============
-function validateFilePath(filePath) {
-    const normalizedPath = path.normalize(filePath);
-    // Just check for path traversal attacks, allow any path containing 'uploads'
-    return !normalizedPath.includes('..') && normalizedPath.includes('uploads');
-}
-
-// ================== Fix the validateFileType function ==================
-function validateFileType(fileName) {
-    const ext = path.extname(fileName).substring(1).toLowerCase(); // Fixed: fileName instead of filename
-    return ALLOWED_FILE_TYPES.includes(ext);
-}
-
 // ========== Helper: Sanitize Input ============
 function sanitizeInput(input) {
     if (!input) return input;
     return validator.escape(input.toString().trim());
-}
-
-// ========== Helper: Format File Size ============
-function formatFileSize(bytes) {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
 // ================== Fixed activity log SQL ==================
@@ -97,7 +70,7 @@ async function addActivityLog(userId, action, targetType, targetId, targetName, 
             'move': 'UPDATE',
             'move_rename': 'UPDATE',
             'delete': 'DELETE',
-            'download': 'UPDATE', // Since DOWNLOAD is not in your ENUM
+            'download': 'UPDATE',
             'copy': 'CREATE',
             'star': 'UPDATE',
             'unstar': 'UPDATE'
@@ -111,20 +84,18 @@ async function addActivityLog(userId, action, targetType, targetId, targetName, 
         const mappedAction = actionMap[action] || 'CREATE';
         const mappedEntityType = entityTypeMap[targetType] || 'FILE';
 
-        // Create description from targetName and additionalInfo
         let description = targetName;
         if (additionalInfo) {
             description += ` - ${additionalInfo}`;
         }
 
-        // Fixed: Match your actual database schema with target_type as varchar
         await db.promise().query(
             `INSERT INTO activity_logs (user_id, action, target_type, target_id, target_name, additional_info, created_at) 
              VALUES (?, ?, ?, ?, ?, ?, NOW())`,
             [userId, mappedAction, mappedEntityType, targetId, targetName, additionalInfo]
         );
 
-        console.log(`📝 Log: ${mappedAction} ${mappedEntityType} (${targetName}) by user ${userId}`);
+        console.log(`Log: ${mappedAction} ${mappedEntityType} (${targetName}) by user ${userId}`);
     } catch (error) {
         console.error("Error adding activity log:", error);
     }
@@ -152,43 +123,7 @@ async function executeWithTransaction(operations) {
   }
 }
 
-// ================== Configure Storage ==================
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    console.log("📁 Setting upload destination: uploads/");
-    cb(null, "uploads/");
-  },
-  filename: (req, file, cb) => {
-    const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const filename = Date.now() + "-" + sanitizedName;
-    console.log("📝 Generated filename:", filename);
-    cb(null, filename);
-  },
-});
-
-const upload = multer({ 
-  storage,
-  limits: {
-    fileSize: MAX_FILE_SIZE,
-    files: MAX_FILES_PER_REQUEST,
-  },
-  fileFilter: (req, file, cb) => {
-    console.log("🔍 File filter check:", {
-      originalname: file.originalname,
-      mimetype: file.mimetype,
-      size: file.size
-    });
-    
-    if (!validateFileType(file.originalname)) {
-      console.log("❌ File type not allowed:", file.originalname);
-      return cb(new Error(`File type not allowed. Allowed types: ${ALLOWED_FILE_TYPES.join(', ')}`), false);
-    }
-    
-    cb(null, true);
-  }
-});
-
-// ================== Get All Categories (Missing) ==================
+// ================== Get All Categories ==================
 router.get('/categories', async (req, res) => {
   try {
     const { is_active, created_by } = req.query;
@@ -222,7 +157,7 @@ router.get('/categories', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error getting categories:", error);
+    console.error("Error getting categories:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -232,25 +167,21 @@ router.post('/categories', async (req, res) => {
   try {
     const { name, description, color, icon, is_active, created_by } = req.body;
 
-    // ✅ Validate required fields
     if (!name || !created_by) {
       return res.status(400).json({ error: "Name and created_by are required" });
     }
 
-    // ✅ Sanitize input
     const sanitizedName = sanitizeInput(name);
     const sanitizedDesc = sanitizeInput(description || "");
     const sanitizedColor = sanitizeInput(color || "#007bff");
     const sanitizedIcon = sanitizeInput(icon || "folder");
     const sanitizedActive = is_active !== undefined ? (is_active ? 1 : 0) : 1;
 
-    // ✅ Validate user exists
     const userValid = await validateUser(created_by);
     if (!userValid) {
       return res.status(400).json({ error: "Invalid created_by user" });
     }
 
-    // ✅ Insert into DB
     const [result] = await db.promise().query(
       `INSERT INTO categories 
       (name, description, color, icon, is_active, created_by, created_at, updated_at) 
@@ -258,7 +189,6 @@ router.post('/categories', async (req, res) => {
       [sanitizedName, sanitizedDesc, sanitizedColor, sanitizedIcon, sanitizedActive, created_by]
     );
 
-    // ✅ Log activity
     await addActivityLog(created_by, 'create', 'folder', result.insertId, sanitizedName);
 
     res.status(201).json({
@@ -267,12 +197,12 @@ router.post('/categories', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error creating category:", error);
+    console.error("Error creating category:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// ================== Get Single Category (Missing) ==================
+// ================== Get Single Category ==================
 router.get('/categories/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -300,12 +230,12 @@ router.get('/categories/:id', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error getting category:", error);
+    console.error("Error getting category:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// ================== Update Category (Missing) ==================
+// ================== Update Category ==================
 router.put('/categories/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -319,7 +249,6 @@ router.put('/categories/:id', async (req, res) => {
       return res.status(400).json({ error: "updated_by is required" });
     }
 
-    // ✅ Check if category exists
     const [existingCategories] = await db.promise().query("SELECT * FROM categories WHERE id = ?", [id]);
     if (existingCategories.length === 0) {
       return res.status(404).json({ error: "Category not found" });
@@ -327,13 +256,11 @@ router.put('/categories/:id', async (req, res) => {
 
     const currentCategory = existingCategories[0];
 
-    // ✅ Validate user exists
     const userValid = await validateUser(updated_by);
     if (!userValid) {
       return res.status(400).json({ error: "Invalid updated_by user" });
     }
 
-    // ✅ Prepare update fields
     const updates = [];
     const params = [];
 
@@ -361,13 +288,11 @@ router.put('/categories/:id', async (req, res) => {
     updates.push("updated_by = ?, updated_at = NOW()");
     params.push(updated_by, id);
 
-    // ✅ Update category
     await db.promise().query(
       `UPDATE categories SET ${updates.join(", ")} WHERE id = ?`,
       params
     );
 
-    // ✅ Log activity
     const actionType = (name && name !== currentCategory.name) ? 'rename' : 'update';
     await addActivityLog(updated_by, actionType, 'folder', id, name || currentCategory.name);
 
@@ -376,12 +301,12 @@ router.put('/categories/:id', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error updating category:", error);
+    console.error("Error updating category:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// ================== Delete Category (Missing) ==================
+// ================== Delete Category ==================
 router.delete('/categories/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -395,13 +320,11 @@ router.delete('/categories/:id', async (req, res) => {
       return res.status(400).json({ error: "deleted_by is required" });
     }
 
-    // ✅ Validate user exists
     const userValid = await validateUser(deleted_by);
     if (!userValid) {
       return res.status(400).json({ error: "Invalid deleted_by user" });
     }
 
-    // ✅ Check if category exists
     const [existingCategories] = await db.promise().query("SELECT * FROM categories WHERE id = ?", [id]);
     if (existingCategories.length === 0) {
       return res.status(404).json({ error: "Category not found" });
@@ -409,22 +332,18 @@ router.delete('/categories/:id', async (req, res) => {
 
     const category = existingCategories[0];
 
-    // ✅ Check for folders in this category
     const [folders] = await db.promise().query("SELECT COUNT(*) as count FROM categories_folders WHERE category_id = ?", [id]);
     if (folders[0].count > 0) {
       return res.status(400).json({ error: "Cannot delete category with folders" });
     }
 
-    // ✅ Check for files in this category
     const [files] = await db.promise().query("SELECT COUNT(*) as count FROM categories_files WHERE category_id = ?", [id]);
     if (files[0].count > 0) {
       return res.status(400).json({ error: "Cannot delete category with files" });
     }
 
-    // ✅ Delete category
     await db.promise().query("DELETE FROM categories WHERE id = ?", [id]);
 
-    // ✅ Log activity
     await addActivityLog(deleted_by, 'delete', 'folder', id, category.name);
 
     res.json({
@@ -432,7 +351,7 @@ router.delete('/categories/:id', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error deleting category:", error);
+    console.error("Error deleting category:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -442,29 +361,24 @@ router.post('/folders', async (req, res) => {
   try {
     const { name, description, category_id, parent_folder_id, path, created_by } = req.body;
 
-    // ✅ Validate required fields
     if (!name || !category_id || !created_by) {
       return res.status(400).json({ error: "Name, category_id, and created_by are required" });
     }
 
-    // ✅ Sanitize input
     const sanitizedName = sanitizeInput(name);
     const sanitizedDesc = sanitizeInput(description || "");
     const sanitizedPath = sanitizeInput(path || sanitizedName);
 
-    // ✅ Validate user exists
     const userValid = await validateUser(created_by);
     if (!userValid) {
       return res.status(400).json({ error: "Invalid created_by user" });
     }
 
-    // ✅ Validate category exists
     const [categoryRows] = await db.promise().query("SELECT id FROM categories WHERE id = ?", [category_id]);
     if (categoryRows.length === 0) {
       return res.status(400).json({ error: "Invalid category_id" });
     }
 
-    // ✅ Validate parent folder if provided
     if (parent_folder_id) {
       const [parentRows] = await db.promise().query("SELECT id FROM categories_folders WHERE id = ?", [parent_folder_id]);
       if (parentRows.length === 0) {
@@ -472,7 +386,6 @@ router.post('/folders', async (req, res) => {
       }
     }
 
-    // ✅ Insert into DB
     const [result] = await db.promise().query(
       `INSERT INTO categories_folders 
       (name, description, category_id, parent_folder_id, path, is_active, created_by, created_at, updated_at) 
@@ -480,7 +393,6 @@ router.post('/folders', async (req, res) => {
       [sanitizedName, sanitizedDesc, category_id, parent_folder_id || null, sanitizedPath, created_by]
     );
 
-    // ✅ Log activity
     await addActivityLog(created_by, 'create', 'folder', result.insertId, sanitizedName);
 
     res.status(201).json({
@@ -489,7 +401,7 @@ router.post('/folders', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error creating folder:", error);
+    console.error("Error creating folder:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -508,13 +420,11 @@ router.get('/folders', async (req, res) => {
     `;
     const params = [];
 
-    // ✅ Filter by category
     if (category_id) {
       query += " AND f.category_id = ?";
       params.push(category_id);
     }
 
-    // ✅ Filter by parent folder
     if (parent_folder_id !== undefined) {
       if (parent_folder_id === 'null' || parent_folder_id === '') {
         query += " AND f.parent_folder_id IS NULL";
@@ -524,7 +434,6 @@ router.get('/folders', async (req, res) => {
       }
     }
 
-    // ✅ Filter by active status
     if (is_active !== undefined) {
       query += " AND f.is_active = ?";
       params.push(is_active === 'true' ? 1 : 0);
@@ -540,7 +449,7 @@ router.get('/folders', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error getting folders:", error);
+    console.error("Error getting folders:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -575,7 +484,7 @@ router.get('/folders/:id', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error getting folder:", error);
+    console.error("Error getting folder:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -594,7 +503,6 @@ router.put('/folders/:id', async (req, res) => {
       return res.status(400).json({ error: "updated_by is required" });
     }
 
-    // ✅ Check if folder exists
     const [existingFolders] = await db.promise().query("SELECT * FROM categories_folders WHERE id = ?", [id]);
     if (existingFolders.length === 0) {
       return res.status(404).json({ error: "Folder not found" });
@@ -602,13 +510,11 @@ router.put('/folders/:id', async (req, res) => {
 
     const currentFolder = existingFolders[0];
 
-    // ✅ Validate user exists
     const userValid = await validateUser(updated_by);
     if (!userValid) {
       return res.status(400).json({ error: "Invalid updated_by user" });
     }
 
-    // ✅ Validate category exists if provided
     if (category_id && category_id !== currentFolder.category_id) {
       const [categoryRows] = await db.promise().query("SELECT id FROM categories WHERE id = ?", [category_id]);
       if (categoryRows.length === 0) {
@@ -616,20 +522,17 @@ router.put('/folders/:id', async (req, res) => {
       }
     }
 
-    // ✅ Validate parent folder if provided
     if (parent_folder_id && parent_folder_id !== currentFolder.parent_folder_id) {
       const [parentRows] = await db.promise().query("SELECT id FROM categories_folders WHERE id = ?", [parent_folder_id]);
       if (parentRows.length === 0) {
         return res.status(400).json({ error: "Invalid parent_folder_id" });
       }
       
-      // Prevent circular reference
       if (parent_folder_id == id) {
         return res.status(400).json({ error: "Folder cannot be its own parent" });
       }
     }
 
-    // ✅ Prepare update fields
     const updates = [];
     const params = [];
 
@@ -661,13 +564,11 @@ router.put('/folders/:id', async (req, res) => {
     updates.push("updated_by = ?, updated_at = NOW()");
     params.push(updated_by, id);
 
-    // ✅ Update folder
     await db.promise().query(
       `UPDATE categories_folders SET ${updates.join(", ")} WHERE id = ?`,
       params
     );
 
-    // ✅ Log activity
     const actionType = (name && name !== currentFolder.name) ? 'rename' : 'update';
     await addActivityLog(updated_by, actionType, 'folder', id, name || currentFolder.name);
 
@@ -676,7 +577,7 @@ router.put('/folders/:id', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error updating folder:", error);
+    console.error("Error updating folder:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -695,13 +596,11 @@ router.delete('/folders/:id', async (req, res) => {
       return res.status(400).json({ error: "deleted_by is required" });
     }
 
-    // ✅ Validate user exists
     const userValid = await validateUser(deleted_by);
     if (!userValid) {
       return res.status(400).json({ error: "Invalid deleted_by user" });
     }
 
-    // ✅ Check if folder exists
     const [existingFolders] = await db.promise().query("SELECT * FROM categories_folders WHERE id = ?", [id]);
     if (existingFolders.length === 0) {
       return res.status(404).json({ error: "Folder not found" });
@@ -709,22 +608,18 @@ router.delete('/folders/:id', async (req, res) => {
 
     const folder = existingFolders[0];
 
-    // ✅ Check for child folders
     const [childFolders] = await db.promise().query("SELECT COUNT(*) as count FROM categories_folders WHERE parent_folder_id = ?", [id]);
     if (childFolders[0].count > 0) {
       return res.status(400).json({ error: "Cannot delete folder with child folders" });
     }
 
-    // ✅ Check for files in this folder
     const [files] = await db.promise().query("SELECT COUNT(*) as count FROM categories_files WHERE folder_id = ?", [id]);
     if (files[0].count > 0) {
       return res.status(400).json({ error: "Cannot delete folder containing files" });
     }
 
-    // ✅ Delete folder
     await db.promise().query("DELETE FROM categories_folders WHERE id = ?", [id]);
 
-    // ✅ Log activity
     await addActivityLog(deleted_by, 'delete', 'folder', id, folder.name);
 
     res.json({
@@ -732,7 +627,7 @@ router.delete('/folders/:id', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error deleting folder:", error);
+    console.error("Error deleting folder:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -746,13 +641,11 @@ router.get('/folders/tree/:category_id', async (req, res) => {
       return res.status(400).json({ error: "Valid category ID is required" });
     }
 
-    // Get all folders for the category
     const [folders] = await db.promise().query(
       "SELECT id, name, parent_folder_id, path FROM categories_folders WHERE category_id = ? AND is_active = 1 ORDER BY name",
       [category_id]
     );
 
-    // Build tree structure
     const buildTree = (parentId = null) => {
       return folders
         .filter(folder => folder.parent_folder_id === parentId)
@@ -770,19 +663,118 @@ router.get('/folders/tree/:category_id', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error getting folder tree:", error);
+    console.error("Error getting folder tree:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// ================== Upload Files ==================
-router.post('/files/upload', upload.array('files', MAX_FILES_PER_REQUEST), async (req, res) => {
+// ================== Upload Single File ==================
+router.post('/files/upload-single', uploadSingle('file'), async (req, res) => {
+  console.log("=== SINGLE FILE UPLOAD DEBUG ===");
+  console.log("Body:", req.body);
+  console.log("File:", req.file);
+  
+  try {
+    const { category_id, folder_id, created_by, description = '' } = req.body;
+    const uploadedFile = req.file;
+
+    if (!category_id || !created_by) {
+      if (uploadedFile) {
+        await cleanupFiles([uploadedFile]);
+      }
+      return res.status(400).json({ error: "category_id and created_by are required" });
+    }
+
+    if (!uploadedFile) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    const userValid = await validateUser(created_by);
+    if (!userValid) {
+      await cleanupFiles([uploadedFile]);
+      return res.status(400).json({ error: "Invalid created_by user" });
+    }
+
+    const [categoryRows] = await db.promise().query("SELECT id FROM categories WHERE id = ?", [category_id]);
+    if (categoryRows.length === 0) {
+      await cleanupFiles([uploadedFile]);
+      return res.status(400).json({ error: "Invalid category_id" });
+    }
+
+    if (folder_id) {
+      const [folderRows] = await db.promise().query("SELECT id FROM categories_folders WHERE id = ? AND category_id = ?", [folder_id, category_id]);
+      if (folderRows.length === 0) {
+        await cleanupFiles([uploadedFile]);
+        return res.status(400).json({ error: "Invalid folder_id for this category" });
+      }
+    }
+
+    try {
+      const sanitizedOriginalName = sanitizeInput(uploadedFile.originalname);
+      
+      const [result] = await db.promise().query(
+        `INSERT INTO categories_files 
+        (name, original_name, description, file_type, file_size, mime_type, file_path, category_id, folder_id, 
+         is_starred, is_active, download_count, last_accessed, created_by, created_at, updated_at) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 0, NOW(), ?, NOW(), NOW())`,
+        [
+          sanitizedOriginalName,
+          sanitizedOriginalName,
+          description,
+          path.extname(uploadedFile.originalname).substring(1).toLowerCase(),
+          uploadedFile.size,
+          uploadedFile.mimetype,
+          uploadedFile.path,
+          category_id,
+          folder_id || null,
+          created_by
+        ]
+      );
+
+      await addActivityLog(created_by, 'upload', 'file', result.insertId, sanitizedOriginalName, 
+        `Size: ${formatFileSize(uploadedFile.size)}, Type: ${uploadedFile.mimetype}`);
+
+      res.status(201).json({
+        message: "File uploaded successfully",
+        file: {
+          file_id: result.insertId,
+          original_name: sanitizedOriginalName,
+          file_size: formatFileSize(uploadedFile.size),
+          file_type: path.extname(uploadedFile.originalname).substring(1).toLowerCase(),
+          mime_type: uploadedFile.mimetype,
+          description: description
+        }
+      });
+
+    } catch (dbError) {
+      console.error(`Error processing file ${uploadedFile.originalname}:`, dbError);
+      await cleanupFiles([uploadedFile]);
+      res.status(500).json({ error: "Failed to save file information" });
+    }
+
+  } catch (error) {
+    console.error("Error uploading file:", error);
+    if (req.file) {
+      await cleanupFiles([req.file]);
+    }
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ================== Upload Multiple Files ==================
+router.post('/files/upload-multiple', uploadMultiple('files'), async (req, res) => {
+  console.log("=== MULTIPLE FILES UPLOAD DEBUG ===");
+  console.log("Body:", req.body);
+  console.log("Files count:", req.files?.length || 0);
+  
   try {
     const { category_id, folder_id, created_by } = req.body;
     const uploadedFiles = req.files;
 
-    // ✅ Validate required fields
     if (!category_id || !created_by) {
+      if (uploadedFiles) {
+        await cleanupFiles(uploadedFiles);
+      }
       return res.status(400).json({ error: "category_id and created_by are required" });
     }
 
@@ -790,22 +782,22 @@ router.post('/files/upload', upload.array('files', MAX_FILES_PER_REQUEST), async
       return res.status(400).json({ error: "No files uploaded" });
     }
 
-    // ✅ Validate user exists
     const userValid = await validateUser(created_by);
     if (!userValid) {
+      await cleanupFiles(uploadedFiles);
       return res.status(400).json({ error: "Invalid created_by user" });
     }
 
-    // ✅ Validate category exists
     const [categoryRows] = await db.promise().query("SELECT id FROM categories WHERE id = ?", [category_id]);
     if (categoryRows.length === 0) {
+      await cleanupFiles(uploadedFiles);
       return res.status(400).json({ error: "Invalid category_id" });
     }
 
-    // ✅ Validate folder if provided
     if (folder_id) {
       const [folderRows] = await db.promise().query("SELECT id FROM categories_folders WHERE id = ? AND category_id = ?", [folder_id, category_id]);
       if (folderRows.length === 0) {
+        await cleanupFiles(uploadedFiles);
         return res.status(400).json({ error: "Invalid folder_id for this category" });
       }
     }
@@ -813,12 +805,169 @@ router.post('/files/upload', upload.array('files', MAX_FILES_PER_REQUEST), async
     const uploadResults = [];
     const errors = [];
 
-    // ✅ Process each uploaded file
     for (const file of uploadedFiles) {
       try {
         const sanitizedOriginalName = sanitizeInput(file.originalname);
         
-        // Insert file record into database
+        const [result] = await db.promise().query(
+          `INSERT INTO categories_files 
+          (name, original_name, description, file_type, file_size, mime_type, file_path, category_id, folder_id, 
+           is_starred, is_active, download_count, last_accessed, created_by, created_at, updated_at) 
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 0, NOW(), ?, NOW(), NOW())`,
+          [
+            sanitizedOriginalName,
+            sanitizedOriginalName,
+            '',
+            path.extname(file.originalname).substring(1).toLowerCase(),
+            file.size,
+            file.mimetype,
+            file.path,
+            category_id,
+            folder_id || null,
+            created_by
+          ]
+        );
+
+        await addActivityLog(created_by, 'upload', 'file', result.insertId, sanitizedOriginalName, 
+          `Size: ${formatFileSize(file.size)}, Type: ${file.mimetype}`);
+
+        uploadResults.push({
+          file_id: result.insertId,
+          original_name: sanitizedOriginalName,
+          file_size: formatFileSize(file.size),
+          file_type: path.extname(file.originalname).substring(1).toLowerCase(),
+          mime_type: file.mimetype
+        });
+
+      } catch (fileError) {
+        console.error(`Error processing file ${file.originalname}:`, fileError);
+        errors.push({
+          filename: file.originalname,
+          error: "Failed to process file"
+        });
+        
+        try {
+          await unlinkAsync(file.path);
+        } catch (unlinkError) {
+          console.error("Failed to cleanup file:", unlinkError);
+        }
+      }
+    }
+
+    res.status(201).json({
+      message: `${uploadResults.length} file(s) uploaded successfully`,
+      files: uploadResults,
+      errors: errors.length > 0 ? errors : undefined,
+      summary: {
+        total: uploadedFiles.length,
+        successful: uploadResults.length,
+        failed: errors.length
+      }
+    });
+
+  } catch (error) {
+    console.error("Error uploading files:", error);
+    
+    if (req.files) {
+      await cleanupFiles(req.files);
+    }
+    
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ================== Bulk Upload with Progress Tracking ==================
+router.post('/files/bulk-upload', uploadMultiple('files'), async (req, res) => {
+  console.log("=== BULK UPLOAD DEBUG ===");
+  console.log("Body:", req.body);
+  console.log("Files count:", req.files?.length || 0);
+  
+  try {
+    const { category_id, folder_id, created_by, overwrite = false } = req.body;
+    const uploadedFiles = req.files;
+
+    if (!category_id || !created_by) {
+      if (uploadedFiles) {
+        await cleanupFiles(uploadedFiles);
+      }
+      return res.status(400).json({ error: "category_id and created_by are required" });
+    }
+
+    if (!uploadedFiles || uploadedFiles.length === 0) {
+      return res.status(400).json({ error: "No files uploaded" });
+    }
+
+    const userValid = await validateUser(created_by);
+    if (!userValid) {
+      await cleanupFiles(uploadedFiles);
+      return res.status(400).json({ error: "Invalid created_by user" });
+    }
+
+    const [categoryRows] = await db.promise().query("SELECT id FROM categories WHERE id = ?", [category_id]);
+    if (categoryRows.length === 0) {
+      await cleanupFiles(uploadedFiles);
+      return res.status(400).json({ error: "Invalid category_id" });
+    }
+
+    if (folder_id) {
+      const [folderRows] = await db.promise().query("SELECT id FROM categories_folders WHERE id = ? AND category_id = ?", [folder_id, category_id]);
+      if (folderRows.length === 0) {
+        await cleanupFiles(uploadedFiles);
+        return res.status(400).json({ error: "Invalid folder_id for this category" });
+      }
+    }
+
+    const results = {
+      uploaded: [],
+      skipped: [],
+      errors: [],
+      total: uploadedFiles.length
+    };
+
+    for (const file of uploadedFiles) {
+      try {
+        const sanitizedOriginalName = sanitizeInput(file.originalname);
+        
+        if (!overwrite) {
+          const [existing] = await db.promise().query(
+            "SELECT id FROM categories_files WHERE original_name = ? AND category_id = ? AND folder_id = ?",
+            [sanitizedOriginalName, category_id, folder_id || null]
+          );
+          
+          if (existing.length > 0) {
+            results.skipped.push({
+              filename: sanitizedOriginalName,
+              reason: "File already exists"
+            });
+            await unlinkAsync(file.path);
+            continue;
+          }
+        } else {
+          const [existing] = await db.promise().query(
+            "SELECT id FROM categories_files WHERE original_name = ? AND category_id = ? AND folder_id = ?",
+            [sanitizedOriginalName, category_id, folder_id || null]
+          );
+          
+          if (existing.length > 0) {
+            await db.promise().query(
+              `UPDATE categories_files 
+               SET file_size = ?, mime_type = ?, file_path = ?, updated_at = NOW()
+               WHERE id = ?`,
+              [file.size, file.mimetype, file.path, existing[0].id]
+            );
+            
+            await addActivityLog(created_by, 'update', 'file', existing[0].id, sanitizedOriginalName);
+            
+            results.uploaded.push({
+              file_id: existing[0].id,
+              original_name: sanitizedOriginalName,
+              file_size: formatFileSize(file.size),
+              action: 'updated'
+            });
+            continue;
+          }
+        }
+
         const [result] = await db.promise().query(
           `INSERT INTO categories_files 
           (name, original_name, file_type, file_size, mime_type, file_path, category_id, folder_id, 
@@ -837,25 +986,22 @@ router.post('/files/upload', upload.array('files', MAX_FILES_PER_REQUEST), async
           ]
         );
 
-        // ✅ Log activity
-        await addActivityLog(created_by, 'upload', 'file', result.insertId, sanitizedOriginalName, 
-          `Size: ${formatFileSize(file.size)}, Type: ${file.mimetype}`);
+        await addActivityLog(created_by, 'upload', 'file', result.insertId, sanitizedOriginalName);
 
-        uploadResults.push({
+        results.uploaded.push({
           file_id: result.insertId,
           original_name: sanitizedOriginalName,
           file_size: formatFileSize(file.size),
-          file_type: path.extname(file.originalname).substring(1).toLowerCase()
+          action: 'created'
         });
 
       } catch (fileError) {
-        console.error(`❌ Error processing file ${file.originalname}:`, fileError);
-        errors.push({
+        console.error(`Error processing file ${file.originalname}:`, fileError);
+        results.errors.push({
           filename: file.originalname,
           error: "Failed to process file"
         });
         
-        // Clean up failed upload
         try {
           await unlinkAsync(file.path);
         } catch (unlinkError) {
@@ -864,24 +1010,16 @@ router.post('/files/upload', upload.array('files', MAX_FILES_PER_REQUEST), async
       }
     }
 
-    res.status(201).json({
-      message: `${uploadResults.length} file(s) uploaded successfully`,
-      uploaded_files: uploadResults,
-      errors: errors.length > 0 ? errors : undefined
+    res.json({
+      message: `Bulk upload completed: ${results.uploaded.length} uploaded, ${results.skipped.length} skipped, ${results.errors.length} errors`,
+      results: results
     });
 
   } catch (error) {
-    console.error("❌ Error uploading files:", error);
+    console.error("Error in bulk upload:", error);
     
-    // Clean up uploaded files on error
     if (req.files) {
-      for (const file of req.files) {
-        try {
-          await unlinkAsync(file.path);
-        } catch (unlinkError) {
-          console.error("Failed to cleanup file:", unlinkError);
-        }
-      }
+      await cleanupFiles(req.files);
     }
     
     res.status(500).json({ error: "Internal server error" });
@@ -905,13 +1043,11 @@ router.get('/files', async (req, res) => {
     `;
     const params = [];
 
-    // ✅ Filter by category
     if (category_id) {
       query += " AND f.category_id = ?";
       params.push(category_id);
     }
 
-    // ✅ Filter by folder
     if (folder_id !== undefined) {
       if (folder_id === 'null' || folder_id === '') {
         query += " AND f.folder_id IS NULL";
@@ -921,25 +1057,21 @@ router.get('/files', async (req, res) => {
       }
     }
 
-    // ✅ Filter by file type
     if (file_type) {
       query += " AND f.file_type = ?";
       params.push(file_type);
     }
 
-    // ✅ Filter by starred
     if (is_starred !== undefined) {
       query += " AND f.is_starred = ?";
       params.push(is_starred === 'true' ? 1 : 0);
     }
 
-    // ✅ Filter by active status
     if (is_active !== undefined) {
       query += " AND f.is_active = ?";
       params.push(is_active === 'true' ? 1 : 0);
     }
 
-    // ✅ Search by filename
     if (search) {
       query += " AND (f.name LIKE ? OR f.original_name LIKE ?)";
       const searchTerm = `%${sanitizeInput(search)}%`;
@@ -948,7 +1080,6 @@ router.get('/files', async (req, res) => {
 
     query += " ORDER BY f.created_at DESC";
 
-    // ✅ Pagination
     if (limit) {
       query += " LIMIT ?";
       params.push(parseInt(limit));
@@ -961,7 +1092,6 @@ router.get('/files', async (req, res) => {
 
     const [files] = await db.promise().query(query, params);
 
-    // ✅ Format file sizes
     const formattedFiles = files.map(file => ({
       ...file,
       formatted_size: formatFileSize(file.file_size)
@@ -974,7 +1104,7 @@ router.get('/files', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error getting files:", error);
+    console.error("Error getting files:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -1013,7 +1143,7 @@ router.get('/files/:id', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error getting file:", error);
+    console.error("Error getting file:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -1032,7 +1162,6 @@ router.put('/files/:id', async (req, res) => {
       return res.status(400).json({ error: "updated_by is required" });
     }
 
-    // ✅ Check if file exists
     const [existingFiles] = await db.promise().query("SELECT * FROM categories_files WHERE id = ?", [id]);
     if (existingFiles.length === 0) {
       return res.status(404).json({ error: "File not found" });
@@ -1040,13 +1169,11 @@ router.put('/files/:id', async (req, res) => {
 
     const currentFile = existingFiles[0];
 
-    // ✅ Validate user exists
     const userValid = await validateUser(updated_by);
     if (!userValid) {
       return res.status(400).json({ error: "Invalid updated_by user" });
     }
 
-    // ✅ Validate category if provided
     if (category_id && category_id !== currentFile.category_id) {
       const [categoryRows] = await db.promise().query("SELECT id FROM categories WHERE id = ?", [category_id]);
       if (categoryRows.length === 0) {
@@ -1054,7 +1181,6 @@ router.put('/files/:id', async (req, res) => {
       }
     }
 
-    // ✅ Validate folder if provided
     if (folder_id && folder_id !== currentFile.folder_id) {
       const finalCategoryId = category_id || currentFile.category_id;
       const [folderRows] = await db.promise().query("SELECT id FROM categories_folders WHERE id = ? AND category_id = ?", [folder_id, finalCategoryId]);
@@ -1063,7 +1189,6 @@ router.put('/files/:id', async (req, res) => {
       }
     }
 
-    // ✅ Prepare update fields
     const updates = [];
     const params = [];
 
@@ -1091,13 +1216,11 @@ router.put('/files/:id', async (req, res) => {
     updates.push("updated_by = ?, updated_at = NOW()");
     params.push(updated_by, id);
 
-    // ✅ Update file
     await db.promise().query(
       `UPDATE categories_files SET ${updates.join(", ")} WHERE id = ?`,
       params
     );
 
-    // ✅ Log activity
     const actionType = (name && name !== currentFile.name) ? 'rename' : 'update';
     const actionInfo = folder_id !== currentFile.folder_id ? 'Moved to different folder' : null;
     await addActivityLog(updated_by, actionType, 'file', id, name || currentFile.name, actionInfo);
@@ -1107,7 +1230,7 @@ router.put('/files/:id', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error updating file:", error);
+    console.error("Error updating file:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -1126,13 +1249,11 @@ router.delete('/files/:id', async (req, res) => {
       return res.status(400).json({ error: "deleted_by is required" });
     }
 
-    // ✅ Validate user exists
     const userValid = await validateUser(deleted_by);
     if (!userValid) {
       return res.status(400).json({ error: "Invalid deleted_by user" });
     }
 
-    // ✅ Check if file exists
     const [existingFiles] = await db.promise().query("SELECT * FROM categories_files WHERE id = ?", [id]);
     if (existingFiles.length === 0) {
       return res.status(404).json({ error: "File not found" });
@@ -1140,20 +1261,16 @@ router.delete('/files/:id', async (req, res) => {
 
     const file = existingFiles[0];
 
-    // ✅ Delete physical file
     try {
       if (validateFilePath(file.file_path)) {
         await unlinkAsync(file.file_path);
       }
     } catch (fileError) {
-      console.error("❌ Error deleting physical file:", fileError);
-      // Continue with database deletion even if physical file deletion fails
+      console.error("Error deleting physical file:", fileError);
     }
 
-    // ✅ Delete from database
     await db.promise().query("DELETE FROM categories_files WHERE id = ?", [id]);
 
-    // ✅ Log activity
     await addActivityLog(deleted_by, 'delete', 'file', id, file.name, `Size: ${formatFileSize(file.file_size)}`);
 
     res.json({
@@ -1161,113 +1278,7 @@ router.delete('/files/:id', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error deleting file:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// ================== Bulk Upload with Progress Tracking ==================
-router.post('/files/bulk-upload', upload.array('files', MAX_FILES_PER_REQUEST), async (req, res) => {
-  try {
-    const { category_id, folder_id, created_by, overwrite } = req.body;
-    const uploadedFiles = req.files;
-
-    if (!category_id || !created_by) {
-      return res.status(400).json({ error: "category_id and created_by are required" });
-    }
-
-    if (!uploadedFiles || uploadedFiles.length === 0) {
-      return res.status(400).json({ error: "No files uploaded" });
-    }
-
-    // ✅ Validate user and category
-    const userValid = await validateUser(created_by);
-    if (!userValid) {
-      return res.status(400).json({ error: "Invalid created_by user" });
-    }
-
-    const [categoryRows] = await db.promise().query("SELECT id FROM categories WHERE id = ?", [category_id]);
-    if (categoryRows.length === 0) {
-      return res.status(400).json({ error: "Invalid category_id" });
-    }
-
-    const results = {
-      uploaded: [],
-      skipped: [],
-      errors: [],
-      total: uploadedFiles.length
-    };
-
-    // Process each file
-    for (const file of uploadedFiles) {
-      try {
-        const sanitizedOriginalName = sanitizeInput(file.originalname);
-        
-        // Check for duplicates if overwrite is false
-        if (!overwrite) {
-          const [existing] = await db.promise().query(
-            "SELECT id FROM categories_files WHERE original_name = ? AND category_id = ? AND folder_id = ?",
-            [sanitizedOriginalName, category_id, folder_id || null]
-          );
-          
-          if (existing.length > 0) {
-            results.skipped.push({
-              filename: sanitizedOriginalName,
-              reason: "File already exists"
-            });
-            await unlinkAsync(file.path);
-            continue;
-          }
-        }
-
-        const [result] = await db.promise().query(
-          `INSERT INTO categories_files 
-          (name, original_name, file_type, file_size, mime_type, file_path, category_id, folder_id, 
-           is_starred, is_active, download_count, last_accessed, created_by, created_at, updated_at) 
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 0, NOW(), ?, NOW(), NOW())`,
-          [
-            sanitizedOriginalName,
-            sanitizedOriginalName,
-            path.extname(file.originalname).substring(1).toLowerCase(),
-            file.size,
-            file.mimetype,
-            file.path,
-            category_id,
-            folder_id || null,
-            created_by
-          ]
-        );
-
-        await addActivityLog(created_by, 'upload', 'file', result.insertId, sanitizedOriginalName);
-
-        results.uploaded.push({
-          file_id: result.insertId,
-          original_name: sanitizedOriginalName,
-          file_size: formatFileSize(file.size)
-        });
-
-      } catch (fileError) {
-        console.error(`❌ Error processing file ${file.originalname}:`, fileError);
-        results.errors.push({
-          filename: file.originalname,
-          error: "Failed to process file"
-        });
-        
-        try {
-          await unlinkAsync(file.path);
-        } catch (unlinkError) {
-          console.error("Failed to cleanup file:", unlinkError);
-        }
-      }
-    }
-
-    res.json({
-      message: `Bulk upload completed: ${results.uploaded.length} uploaded, ${results.skipped.length} skipped, ${results.errors.length} errors`,
-      results: results
-    });
-
-  } catch (error) {
-    console.error("❌ Error in bulk upload:", error);
+    console.error("Error deleting file:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -1285,19 +1296,16 @@ router.post('/files/move-multiple', async (req, res) => {
       return res.status(400).json({ error: "target_category_id and moved_by are required" });
     }
 
-    // ✅ Validate user
     const userValid = await validateUser(moved_by);
     if (!userValid) {
       return res.status(400).json({ error: "Invalid moved_by user" });
     }
 
-    // ✅ Validate target category
     const [categoryRows] = await db.promise().query("SELECT id FROM categories WHERE id = ?", [target_category_id]);
     if (categoryRows.length === 0) {
       return res.status(400).json({ error: "Invalid target_category_id" });
     }
 
-    // ✅ Validate target folder if provided
     if (target_folder_id) {
       const [folderRows] = await db.promise().query("SELECT id FROM categories_folders WHERE id = ? AND category_id = ?", [target_folder_id, target_category_id]);
       if (folderRows.length === 0) {
@@ -1307,7 +1315,6 @@ router.post('/files/move-multiple', async (req, res) => {
 
     const results = { moved: [], errors: [] };
 
-    // Process each file
     for (const file_id of file_ids) {
       try {
         const [files] = await db.promise().query("SELECT * FROM categories_files WHERE id = ?", [file_id]);
@@ -1325,7 +1332,7 @@ router.post('/files/move-multiple', async (req, res) => {
         results.moved.push({ file_id, name: files[0].name });
 
       } catch (error) {
-        console.error(`❌ Error moving file ${file_id}:`, error);
+        console.error(`Error moving file ${file_id}:`, error);
         results.errors.push({ file_id, error: "Failed to move file" });
       }
     }
@@ -1336,7 +1343,7 @@ router.post('/files/move-multiple', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error moving multiple files:", error);
+    console.error("Error moving multiple files:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -1372,13 +1379,11 @@ router.post('/files/copy-multiple', async (req, res) => {
         const originalFile = files[0];
         const newFileName = `Copy of ${originalFile.name}`;
 
-        // Copy physical file
         const originalPath = originalFile.file_path;
         const newPath = originalPath.replace(path.basename(originalPath), `${Date.now()}-${path.basename(originalPath)}`);
         
         await fs.promises.copyFile(originalPath, newPath);
 
-        // Insert new record
         const [result] = await db.promise().query(
           `INSERT INTO categories_files 
           (name, original_name, file_type, file_size, mime_type, file_path, category_id, folder_id, 
@@ -1401,7 +1406,7 @@ router.post('/files/copy-multiple', async (req, res) => {
         results.copied.push({ file_id: result.insertId, name: newFileName });
 
       } catch (error) {
-        console.error(`❌ Error copying file ${file_id}:`, error);
+        console.error(`Error copying file ${file_id}:`, error);
         results.errors.push({ file_id, error: "Failed to copy file" });
       }
     }
@@ -1412,7 +1417,7 @@ router.post('/files/copy-multiple', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error copying multiple files:", error);
+    console.error("Error copying multiple files:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -1427,7 +1432,6 @@ router.get('/files/:id/download', async (req, res) => {
       return res.status(400).json({ error: "Valid file ID is required" });
     }
 
-    // ✅ Get file info
     const [files] = await db.promise().query("SELECT * FROM categories_files WHERE id = ? AND is_active = 1", [id]);
     if (files.length === 0) {
       return res.status(404).json({ error: "File not found" });
@@ -1435,38 +1439,32 @@ router.get('/files/:id/download', async (req, res) => {
 
     const file = files[0];
 
-    // ✅ Validate file path
     if (!validateFilePath(file.file_path)) {
       return res.status(400).json({ error: "Invalid file path" });
     }
 
-    // ✅ Check if physical file exists
     if (!fs.existsSync(file.file_path)) {
       return res.status(404).json({ error: "Physical file not found" });
     }
 
-    // ✅ Update download count and last accessed
     await db.promise().query(
       "UPDATE categories_files SET download_count = download_count + 1, last_accessed = NOW() WHERE id = ?",
       [id]
     );
 
-    // ✅ Log download activity if user_id provided
     if (user_id) {
       await addActivityLog(user_id, 'download', 'file', id, file.name, `Size: ${formatFileSize(file.file_size)}`);
     }
 
-    // ✅ Set appropriate headers
     res.setHeader('Content-Disposition', `attachment; filename="${file.original_name}"`);
     res.setHeader('Content-Type', file.mime_type);
     res.setHeader('Content-Length', file.file_size);
 
-    // ✅ Stream file
     const fileStream = fs.createReadStream(file.file_path);
     fileStream.pipe(res);
 
   } catch (error) {
-    console.error("❌ Error downloading file:", error);
+    console.error("Error downloading file:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -1485,13 +1483,11 @@ router.patch('/files/:id/star', async (req, res) => {
       return res.status(400).json({ error: "user_id is required" });
     }
 
-    // ✅ Validate user exists
     const userValid = await validateUser(user_id);
     if (!userValid) {
       return res.status(400).json({ error: "Invalid user_id" });
     }
 
-    // ✅ Check if file exists
     const [existingFiles] = await db.promise().query("SELECT * FROM categories_files WHERE id = ?", [id]);
     if (existingFiles.length === 0) {
       return res.status(404).json({ error: "File not found" });
@@ -1500,13 +1496,11 @@ router.patch('/files/:id/star', async (req, res) => {
     const file = existingFiles[0];
     const newStarredStatus = is_starred !== undefined ? (is_starred ? 1 : 0) : (file.is_starred ? 0 : 1);
 
-    // ✅ Update starred status
     await db.promise().query(
       "UPDATE categories_files SET is_starred = ?, updated_by = ?, updated_at = NOW() WHERE id = ?",
       [newStarredStatus, user_id, id]
     );
 
-    // ✅ Log activity
     const action = newStarredStatus ? 'starred' : 'unstarred';
     await addActivityLog(user_id, 'update', 'file', id, file.name, `File ${action}`);
 
@@ -1516,7 +1510,7 @@ router.patch('/files/:id/star', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error toggling file star:", error);
+    console.error("Error toggling file star:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -1562,9 +1556,12 @@ router.get('/files/stats/:category_id', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Error getting file statistics:", error);
+    console.error("Error getting file statistics:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+// ================== Error Handler Middleware ==================
+router.use(handleMulterError);
 
 module.exports = router;

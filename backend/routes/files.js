@@ -741,21 +741,33 @@ router.get("/activity-logs", async (req, res) => {
 module.exports = router;
 
 */
-const express = require("express");
-const multer = require("multer");
-const path = require("path");
-const db = require("../db");
-const fs = require("fs");
-const util = require("util");
-const validator = require("validator");
+const express = require('express');
+const path = require('path');
+const db = require('../db');
+const fs = require('fs');
+const util = require('util');
+const validator = require('validator');
 const archiver = require('archiver');
 const unlinkAsync = util.promisify(fs.unlink);
-// Instead of require('mysql2')
 const mysql = require('mysql2/promise');
 
 
+const { 
+  uploadSingle, 
+  uploadMultiple, 
+  handleMulterError, 
+  formatFileSize, 
+  validateFileType, 
+  validateFilePath, 
+  cleanupFiles,
+  ALLOWED_FILE_TYPES,
+  MAX_FILE_SIZE,
+  MAX_FILES_PER_REQUEST 
+} = require('../config/multerConfig.js');
+
 const router = express.Router();
 
+/*
 // ================== Security Configuration ==================
 const ALLOWED_FILE_TYPES = [
   'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', // Images
@@ -768,6 +780,7 @@ const ALLOWED_FILE_TYPES = [
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const MAX_FILES_PER_REQUEST = 10;
+*/
 
 // ================== Helper: Validate User ==================
 async function validateUser(userId) {
@@ -801,18 +814,22 @@ async function getUserDetails(userId) {
   }
 }
 
+/*
 // ================== Helper: Validate File Path ==================
 function validateFilePath(filePath) {
   const normalizedPath = path.normalize(filePath);
   // Just check for path traversal attacks, allow any path containing 'uploads'
   return !normalizedPath.includes('..') && normalizedPath.includes('uploads');
 }
+*/
 
+/*
 // ================== Helper: Validate File Type ==================
 function validateFileType(filename) {
   const ext = path.extname(filename).substring(1).toLowerCase();
   return ALLOWED_FILE_TYPES.includes(ext);
 }
+*/
 
 // ================== Helper: Sanitize Input ==================
 function sanitizeInput(input) {
@@ -820,6 +837,7 @@ function sanitizeInput(input) {
   return validator.escape(input.toString().trim());
 }
 
+/*
 // ================== Helper: Format File Size ==================
 function formatFileSize(bytes) {
   if (bytes === 0) return '0 Bytes';
@@ -828,6 +846,7 @@ function formatFileSize(bytes) {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
+*/
 
 // ================== Helper: Add Activity Log ==================
 async function addActivityLog(userId, action, targetType, targetId, targetName, additionalInfo = null) {
@@ -886,6 +905,7 @@ async function executeWithTransaction(operations) {
   }
 }
 
+/*
 // ================== Configure Storage ==================
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -899,7 +919,9 @@ const storage = multer.diskStorage({
     cb(null, filename);
   },
 });
+*/
 
+/*
 const upload = multer({ 
   storage,
   limits: {
@@ -921,6 +943,7 @@ const upload = multer({
     cb(null, true);
   }
 });
+*/
 
 // ================== Create Folder ==================
 router.post("/folders", async (req, res) => {
@@ -1011,7 +1034,7 @@ router.post("/folders", async (req, res) => {
 });
 
 // ================== Upload File (Single) ==================
-router.post("/upload", upload.single("file"), async (req, res) => {
+router.post("/upload", uploadSingle('file'), async (req, res) => {
   console.log("\n📤 ===== FILE UPLOAD REQUEST =====");
   console.log("📥 Request body:", req.body);
   console.log("📎 File info:", req.file);
@@ -1135,7 +1158,7 @@ router.post("/upload", upload.single("file"), async (req, res) => {
 });
 
 // ================== Upload Multiple Files ==================
-router.post("/upload/multiple", upload.array("files", MAX_FILES_PER_REQUEST), async (req, res) => {
+router.post("/upload/multiple", uploadMultiple('files'), async (req, res) => {
   console.log("\n📤 ===== MULTIPLE FILE UPLOAD REQUEST =====");
   console.log("📥 Request body:", req.body);
   console.log("📎 Files count:", req.files?.length || 0);
@@ -2628,6 +2651,7 @@ router.post("/copy", async (req, res) => {
   }
 });
 
+/*
 // ================== Error Handler ==================
 router.use((error, req, res, next) => {
   console.error("💥 Unhandled error in files router:", error);
@@ -2646,6 +2670,7 @@ router.use((error, req, res, next) => {
   
   res.status(500).json({ error: "Internal server error: " + error.message });
 });
+*/
 
 // ================== Get File/Folder Info ==================
 router.get("/info/:id", async (req, res) => {
@@ -3061,6 +3086,9 @@ router.get('/api/users', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch users' });
   }
 });
+
+// Add error handler at the end
+router.use(handleMulterError);
 
 console.log("📁 Enhanced Files router loaded with comprehensive features");
 
