@@ -1421,7 +1421,7 @@ router.post('/files/copy-multiple', async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
-
+/*
 // ================== Download File ==================
 router.get('/files/:id/download', async (req, res) => {
   try {
@@ -1454,6 +1454,62 @@ router.get('/files/:id/download', async (req, res) => {
 
     if (user_id) {
       await addActivityLog(user_id, 'download', 'file', id, file.name, `Size: ${formatFileSize(file.file_size)}`);
+    }
+
+    res.setHeader('Content-Disposition', `attachment; filename="${file.original_name}"`);
+    res.setHeader('Content-Type', file.mime_type);
+    res.setHeader('Content-Length', file.file_size);
+
+    const fileStream = fs.createReadStream(file.file_path);
+    fileStream.pipe(res);
+
+  } catch (error) {
+    console.error("Error downloading file:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+*/
+// ================== Download File ==================
+router.get('/files/:id/download', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { user_id, preview } = req.query;  // Add 'preview' parameter
+
+    if (!id || isNaN(id)) {
+      return res.status(400).json({ error: "Valid file ID is required" });
+    }
+
+    const [files] = await db.promise().query("SELECT * FROM categories_files WHERE id = ? AND is_active = 1", [id]);
+    if (files.length === 0) {
+      return res.status(404).json({ error: "File not found" });
+    }
+
+    const file = files[0];
+
+    if (!validateFilePath(file.file_path)) {
+      return res.status(400).json({ error: "Invalid file path" });
+    }
+
+    if (!fs.existsSync(file.file_path)) {
+      return res.status(404).json({ error: "Physical file not found" });
+    }
+
+    // Only log and increment download count if NOT a preview
+    if (preview !== 'true') {
+      await db.promise().query(
+        "UPDATE categories_files SET download_count = download_count + 1, last_accessed = NOW() WHERE id = ?",
+        [id]
+      );
+
+      if (user_id) {
+        await addActivityLog(user_id, 'download', 'file', id, file.name, `Size: ${formatFileSize(file.file_size)}`);
+      }
+    } else {
+      // Just update last_accessed for previews, no activity log
+      await db.promise().query(
+        "UPDATE categories_files SET last_accessed = NOW() WHERE id = ?",
+        [id]
+      );
     }
 
     res.setHeader('Content-Disposition', `attachment; filename="${file.original_name}"`);

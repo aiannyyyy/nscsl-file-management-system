@@ -26,11 +26,10 @@ import {
   Download,
   Star,
   StarOff,
-  MoreVertical,
   ChevronRight,
   Home,
   File,
-  CheckCircle
+  CheckCircle,
 } from 'lucide-react';
 
 // Icon mapping for categories
@@ -158,6 +157,10 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
   const [error, setError] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
   
+  // File viewing states - NEW ADDITIONS
+  const [showFileViewer, setShowFileViewer] = useState(false);
+  const [viewingFile, setViewingFile] = useState<FileItem | null>(null);
+  
   // Form states
   const [categoryForm, setCategoryForm] = useState({
     name: '',
@@ -183,6 +186,7 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
 
   const CURRENT_USER_ID = currentUser.id?.toString() || '1';
 
+  // Fetch data on component mount and when navigation changes
   useEffect(() => {
     if (currentView === 'categories') {
       fetchCategories();
@@ -209,7 +213,6 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
     try {
       setLoading(true);
       
-      // Fetch folders
       let folderUrl = 'http://localhost:3002/api/folders';
       const folderParams = new URLSearchParams();
       if (currentCategoryId) folderParams.append('category_id', currentCategoryId.toString());
@@ -218,7 +221,6 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
       }
       if (folderParams.toString()) folderUrl += `?${folderParams}`;
       
-      // Fetch files
       let fileUrl = 'http://localhost:3002/api/files';
       const fileParams = new URLSearchParams();
       if (currentCategoryId) fileParams.append('category_id', currentCategoryId.toString());
@@ -453,13 +455,6 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
   };
 
   const handleFileUpload = async () => {
-    console.log("=== FRONTEND FILE UPLOAD DEBUG ===");
-    console.log("Upload files:", uploadFiles);
-    console.log("Upload mode:", uploadMode);
-    console.log("Current category ID:", currentCategoryId);
-    console.log("Current folder ID:", currentFolderId);
-    console.log("Current user ID:", CURRENT_USER_ID);
-
     if (uploadFiles.length === 0) {
       setError('Please select files to upload');
       return;
@@ -473,7 +468,6 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
     setSubmitting(true);
     setError('');
 
-    // Initialize upload progress
     const progressArray = uploadFiles.map(file => ({
       fileName: file.name,
       progress: 0,
@@ -484,29 +478,19 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
     try {
       const formData = new FormData();
       
-      // Append files
       uploadFiles.forEach(file => {
         formData.append('files', file);
       });
       
-      // Append metadata
       formData.append('category_id', currentCategoryId.toString());
       formData.append('created_by', CURRENT_USER_ID);
       if (currentFolderId) {
         formData.append('folder_id', currentFolderId.toString());
       }
 
-      console.log("=== FormData Debug ===");
-      console.log("Category ID:", currentCategoryId.toString());
-      console.log("Created By:", CURRENT_USER_ID);
-      console.log("Folder ID:", currentFolderId?.toString() || 'null');
-      console.log("Files count:", uploadFiles.length);
-
-      // Choose endpoint based on upload mode
       let endpoint = '';
       if (uploadMode === 'single') {
         endpoint = 'http://localhost:3002/api/files/upload-single';
-        // For single file, use 'file' as field name
         const singleFormData = new FormData();
         singleFormData.append('file', uploadFiles[0]);
         singleFormData.append('category_id', currentCategoryId.toString());
@@ -524,10 +508,6 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
           const errorData = await response.json();
           throw new Error(errorData?.error || 'Upload failed');
         }
-
-        const result = await response.json();
-        console.log("Single upload result:", result);
-
       } else if (uploadMode === 'bulk') {
         endpoint = 'http://localhost:3002/api/files/bulk-upload';
         
@@ -540,12 +520,7 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
           const errorData = await response.json();
           throw new Error(errorData?.error || 'Bulk upload failed');
         }
-
-        const result = await response.json();
-        console.log("Bulk upload result:", result);
-
       } else {
-        // Default to multiple upload
         endpoint = 'http://localhost:3002/api/files/upload-multiple';
         
         const response = await fetch(endpoint, {
@@ -557,12 +532,8 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
           const errorData = await response.json();
           throw new Error(errorData?.error || 'Upload failed');
         }
-
-        const result = await response.json();
-        console.log("Multiple upload result:", result);
       }
 
-      // Update progress to completed
       setUploadProgress(prev => 
         prev.map(item => ({
           ...item,
@@ -571,19 +542,15 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
         }))
       );
 
-      // Refresh file list
       await fetchFilesAndFolders();
       
-      // Close modal after a brief delay to show completion
       setTimeout(() => {
         closeModal();
       }, 1000);
 
     } catch (err) {
-      console.error("Upload error:", err);
       setError(err instanceof Error ? err.message : 'Upload failed');
       
-      // Update progress to show error
       setUploadProgress(prev => 
         prev.map(item => ({
           ...item,
@@ -601,7 +568,6 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
       const files = Array.from(e.target.files);
       setUploadFiles(files);
       
-      // Auto-set upload mode based on file count
       if (files.length === 1) {
         setUploadMode('single');
       } else if (files.length <= 5) {
@@ -629,7 +595,6 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
     const files = Array.from(e.dataTransfer.files);
     setUploadFiles(files);
     
-    // Auto-set upload mode based on file count
     if (files.length === 1) {
       setUploadMode('single');
     } else if (files.length <= 5) {
@@ -667,11 +632,52 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
         throw new Error(errorData?.error || 'Failed to update star status');
       }
 
-      // Refresh file list
       await fetchFilesAndFolders();
+      
+      // Update viewing file if it's currently being viewed
+      if (viewingFile && viewingFile.id === file.id) {
+        setViewingFile({ ...viewingFile, is_starred: !file.is_starred });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update star status');
     }
+  };
+
+  // NEW: Function to open file viewer
+  const handleViewFile = (file: FileItem) => {
+    setViewingFile(file);
+    setShowFileViewer(true);
+  };
+
+  // NEW: Function to close file viewer
+  const closeFileViewer = () => {
+    setShowFileViewer(false);
+    setViewingFile(null);
+  };
+
+  // NEW: Helper functions to check file types
+  const isImageFile = (fileType: string) => {
+    const imageTypes = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'];
+    return imageTypes.includes(fileType.toLowerCase());
+  };
+
+  const isPDFFile = (fileType: string) => {
+    return fileType.toLowerCase() === 'pdf';
+  };
+
+  const isTextFile = (fileType: string) => {
+    const textTypes = ['txt', 'md', 'json', 'xml', 'csv', 'log'];
+    return textTypes.includes(fileType.toLowerCase());
+  };
+
+  const isVideoFile = (fileType: string) => {
+    const videoTypes = ['mp4', 'webm', 'ogg', 'mov'];
+    return videoTypes.includes(fileType.toLowerCase());
+  };
+
+  const isAudioFile = (fileType: string) => {
+    const audioTypes = ['mp3', 'wav', 'ogg', 'm4a'];
+    return audioTypes.includes(fileType.toLowerCase());
   };
 
   const getIconComponent = (iconName: string) => {
@@ -733,6 +739,7 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
     }
   };
 
+  // Loading state
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -975,8 +982,7 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
             </>
           )}
         </div>
-
-        {/* Content */}
+        {/* Content Area */}
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
           {currentView === 'categories' ? (
             /* Categories View */
@@ -1040,6 +1046,8 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
                 </div>
               </div>
             ) : (
+              /* Categories List View - continue in next part */
+              /* Categories List View */
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-200">
@@ -1162,11 +1170,12 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
                     </div>
                   ))}
 
-                  {/* Files */}
+                  {/* Files - WITH CLICK TO VIEW */}
                   {(filteredData() as any).files?.map((file: FileItem) => (
                     <div
                       key={`file-${file.id}`}
-                      className="group bg-white border border-gray-200 rounded-xl p-6 hover:shadow-md hover:border-gray-300 transition-all duration-200"
+                      className="group bg-white border border-gray-200 rounded-xl p-6 hover:shadow-md hover:border-gray-300 transition-all duration-200 cursor-pointer"
+                      onClick={() => handleViewFile(file)}
                     >
                       <div className="flex items-center justify-between mb-4">
                         <div className="p-3 bg-blue-50 rounded-lg">
@@ -1174,7 +1183,10 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
                         </div>
                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                           <button
-                            onClick={() => handleStarFile(file)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleStarFile(file);
+                            }}
                             className="p-1 hover:bg-gray-100 rounded transition-colors"
                           >
                             {file.is_starred ? (
@@ -1184,13 +1196,19 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
                             )}
                           </button>
                           <button
-                            onClick={() => handleDownloadFile(file)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDownloadFile(file);
+                            }}
                             className="p-1 hover:bg-gray-100 rounded transition-colors"
                           >
                             <Download className="w-4 h-4 text-gray-400 hover:text-green-600" />
                           </button>
                           <button
-                            onClick={() => openModal('delete', 'file', file)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openModal('delete', 'file', file);
+                            }}
                             className="p-1 hover:bg-gray-100 rounded transition-colors"
                           >
                             <Trash2 className="w-4 h-4 text-gray-400 hover:text-red-600" />
@@ -1220,6 +1238,7 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
                 </div>
               </div>
             ) : (
+              /* List View for Files and Folders */
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-200">
@@ -1279,9 +1298,13 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
                       </tr>
                     ))}
 
-                    {/* Files */}
+                    {/* Files - WITH CLICK TO VIEW */}
                     {(filteredData() as any).files?.map((file: FileItem) => (
-                      <tr key={`file-${file.id}`} className="hover:bg-gray-50 transition-colors">
+                      <tr 
+                        key={`file-${file.id}`} 
+                        className="hover:bg-gray-50 transition-colors cursor-pointer"
+                        onClick={() => handleViewFile(file)}
+                      >
                         <td className="p-4">
                           <div className="flex items-center gap-3">
                             <div className="p-2 bg-blue-50 rounded-lg">
@@ -1308,7 +1331,10 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
                         <td className="p-4">
                           <div className="flex items-center gap-1">
                             <button
-                              onClick={() => handleStarFile(file)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStarFile(file);
+                              }}
                               className="p-1 hover:bg-gray-100 rounded transition-colors"
                             >
                               {file.is_starred ? (
@@ -1318,13 +1344,19 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
                               )}
                             </button>
                             <button
-                              onClick={() => handleDownloadFile(file)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDownloadFile(file);
+                              }}
                               className="p-1 hover:bg-gray-100 rounded transition-colors"
                             >
                               <Download className="w-4 h-4 text-gray-400 hover:text-green-600" />
                             </button>
                             <button
-                              onClick={() => openModal('delete', 'file', file)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openModal('delete', 'file', file);
+                              }}
                               className="p-1 hover:bg-gray-100 rounded transition-colors"
                             >
                               <Trash2 className="w-4 h-4 text-gray-400 hover:text-red-600" />
@@ -1339,7 +1371,6 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
             )
           )}
         </div>
-
         {/* Empty State */}
         {((currentView === 'categories' && (filteredData() as Category[]).length === 0) ||
           (currentView === 'files-folders' && 
@@ -1387,7 +1418,6 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
             )}
           </div>
         )}
-
         {/* Modal */}
         {showModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -1442,7 +1472,7 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
                   </div>
                 </div>
               ) : modalType === 'file' && modalMode === 'add' ? (
-                /* Enhanced File Upload Form */
+                /* File Upload Form */
                 <div>
                   <div className="space-y-4">
                     {/* Upload Mode Selection */}
@@ -1777,6 +1807,161 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+        {/* File Viewer Modal - NEW */}
+        {showFileViewer && viewingFile && (
+          <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg max-w-6xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+              {/* Header */}
+              <div className="flex items-center justify-between p-4 border-b border-gray-200">
+                <div className="flex items-center gap-3 flex-1 min-w-0">
+                  <div className="p-2 bg-blue-50 rounded-lg">
+                    {getFileTypeIcon(viewingFile.file_type)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-lg font-semibold text-gray-900 truncate">
+                      {viewingFile.name}
+                    </h3>
+                    <p className="text-sm text-gray-600">
+                      {viewingFile.formatted_size} • {viewingFile.file_type.toUpperCase()} • {formatDate(viewingFile.created_at)}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleStarFile(viewingFile);
+                    }}
+                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                    title={viewingFile.is_starred ? 'Unstar' : 'Star'}
+                  >
+                    {viewingFile.is_starred ? (
+                      <Star className="w-5 h-5 text-yellow-600 fill-current" />
+                    ) : (
+                      <StarOff className="w-5 h-5 text-gray-600" />
+                    )}
+                  </button>
+                  <button
+                    onClick={() => handleDownloadFile(viewingFile)}
+                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                    title="Download"
+                  >
+                    <Download className="w-5 h-5 text-gray-600" />
+                  </button>
+                  <button
+                    onClick={closeFileViewer}
+                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                    title="Close"
+                  >
+                    <X className="w-5 h-5 text-gray-600" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 overflow-auto bg-gray-50 p-6">
+                {isImageFile(viewingFile.file_type) ? (
+                  <div className="flex items-center justify-center h-full">
+                    <img 
+                      src={`http://localhost:3002/api/files/${viewingFile.id}/download?user_id=${CURRENT_USER_ID}&preview=true`}
+                      alt={viewingFile.name}
+                      className="max-w-full max-h-full object-contain rounded-lg shadow-lg"
+                    />
+                  </div>
+                ) : isPDFFile(viewingFile.file_type) ? (
+                  <div className="h-full">
+                    <iframe
+                      src={`http://localhost:3002/api/files/${viewingFile.id}/download?user_id=${CURRENT_USER_ID}&preview=true`}
+                      className="w-full h-full rounded-lg shadow-lg"
+                      title={viewingFile.name}
+                    />
+                  </div>
+                ) : isVideoFile(viewingFile.file_type) ? (
+                  <div className="flex items-center justify-center h-full">
+                    <video 
+                      controls
+                      className="max-w-full max-h-full rounded-lg shadow-lg"
+                      src={`http://localhost:3002/api/files/${viewingFile.id}/download?user_id=${CURRENT_USER_ID}&preview=true`}
+                    >
+                      Your browser does not support the video tag.
+                    </video>
+                  </div>
+                ) : isAudioFile(viewingFile.file_type) ? (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="bg-white rounded-lg shadow-lg p-8 max-w-md w-full">
+                      {/* ... */}
+                      <audio 
+                        controls
+                        className="w-full"
+                        src={`http://localhost:3002/api/files/${viewingFile.id}/download?user_id=${CURRENT_USER_ID}&preview=true`}
+                      >
+                        Your browser does not support the audio tag.
+                      </audio>
+                    </div>
+                  </div>
+                ) : isTextFile(viewingFile.file_type) ? (
+                  <div className="bg-white rounded-lg shadow-lg p-6 h-full overflow-auto">
+                    <iframe
+                      src={`http://localhost:3002/api/files/${viewingFile.id}/download?user_id=${CURRENT_USER_ID}&preview=true`}
+                      className="w-full h-full border-0"
+                      title={viewingFile.name}
+                    />
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center">
+                      <div className="p-6 bg-white rounded-full mx-auto mb-4 w-20 h-20 flex items-center justify-center">
+                        <File className="w-10 h-10 text-gray-400" />
+                      </div>
+                      <h4 className="text-lg font-medium text-gray-900 mb-2">Preview not available</h4>
+                      <p className="text-gray-600 mb-6">
+                        This file type cannot be previewed in the browser.
+                      </p>
+                      <button
+                        onClick={() => handleDownloadFile(viewingFile)}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors inline-flex items-center gap-2"
+                      >
+                        <Download className="w-4 h-4" />
+                        Download File
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="border-t border-gray-200 p-4 bg-white">
+                <div className="flex items-center justify-between text-sm text-gray-600">
+                  <div className="flex items-center gap-6">
+                    <div>
+                      <span className="font-medium">Created by:</span> {viewingFile.created_by_name || 'Unknown'}
+                    </div>
+                    <div>
+                      <span className="font-medium">Downloads:</span> {viewingFile.download_count}
+                    </div>
+                    {viewingFile.last_accessed && (
+                      <div>
+                        <span className="font-medium">Last accessed:</span> {formatDate(viewingFile.last_accessed)}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        closeFileViewer();
+                        openModal('delete', 'file', viewingFile);
+                      }}
+                      className="px-3 py-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors inline-flex items-center gap-1"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         )}
