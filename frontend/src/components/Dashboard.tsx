@@ -471,9 +471,10 @@ const getActionDescription = (action: string, targetType: 'FILE' | 'FOLDER', tar
         </div>
       </div>
       
-      {/* Recent Activity - Real Time with Scrollable Content */}
+      {/* Recent Activity and Analytics Section */}
       <div className="grid grid-cols-2 gap-6">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 h-100">
+        {/* Recent Activity */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-gray-900">Recent Activity</h3>
             <div className="flex items-center gap-2">
@@ -588,8 +589,197 @@ const getActionDescription = (action: string, targetType: 'FILE' | 'FOLDER', tar
           </div>
         </div>
         
-        {/* Empty space for future card or leave empty */}
-        <div className=""></div>
+        {/* Analytics & Insights Section */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900">Analytics & Insights</h3>
+            <button 
+              onClick={() => handleQuickAction('reports')}
+              className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+            >
+              View Details
+            </button>
+          </div>
+          
+          {/* Scrollable content area */}
+          <div className="h-80 overflow-y-auto overflow-x-hidden pr-2 space-y-6">
+            {/* User Activity Summary */}
+            <div className="border-b border-gray-100 pb-4">
+              <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                <User className="w-4 h-4 text-blue-600" />
+                User Activity Summary
+              </h4>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">Active Today</span>
+                  <span className="text-sm font-semibold text-gray-900">
+                    {new Set(recentActivities.map(a => a.user_name)).size} users
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">Total Actions</span>
+                  <span className="text-sm font-semibold text-gray-900">
+                    {recentActivities.length}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">Most Active</span>
+                  <span className="text-sm font-semibold text-gray-900">
+                    {recentActivities.length > 0 
+                      ? Object.entries(
+                          recentActivities.reduce((acc, curr) => {
+                            acc[curr.user_name] = (acc[curr.user_name] || 0) + 1;
+                            return acc;
+                          }, {} as Record<string, number>)
+                        ).sort((a, b) => b[1] - a[1])[0]?.[1] || 0
+                      : 0} actions
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Action Breakdown */}
+            <div className="border-b border-gray-100 pb-4">
+              <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                <Activity className="w-4 h-4 text-green-600" />
+                Action Breakdown
+              </h4>
+              <div className="space-y-3">
+                {(() => {
+                  const actionCounts = recentActivities.reduce((acc, curr) => {
+                    const normalizedAction = curr.action === 'UPLOADED' || curr.action === 'UPLOAD' ? 'UPLOAD' :
+                                           curr.action === 'DOWNLOADED' || curr.action === 'DOWNLOAD' ? 'DOWNLOAD' :
+                                           curr.action === 'CREATED' || curr.action === 'CREATE' ? 'CREATE' :
+                                           curr.action === 'DELETED' || curr.action === 'DELETE' ? 'DELETE' :
+                                           curr.action;
+                    acc[normalizedAction] = (acc[normalizedAction] || 0) + 1;
+                    return acc;
+                  }, {} as Record<string, number>);
+                  
+                  const total = recentActivities.length || 1;
+                  
+                  return Object.entries(actionCounts)
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 5)
+                    .map(([action, count]) => {
+                      const percentage = Math.round((count / total) * 100);
+                      const colors = {
+                        'UPLOAD': 'bg-green-500',
+                        'DOWNLOAD': 'bg-blue-500',
+                        'DELETE': 'bg-red-500',
+                        'CREATE': 'bg-purple-500',
+                        'UPDATE': 'bg-orange-500',
+                        'RENAME': 'bg-yellow-500',
+                        'COPY': 'bg-indigo-500',
+                        'MOVE': 'bg-teal-500'
+                      };
+                      
+                      return (
+                        <div key={action}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium text-gray-700 capitalize">
+                              {action.toLowerCase()}s
+                            </span>
+                            <span className="text-xs text-gray-600">{count} ({percentage}%)</span>
+                          </div>
+                          <div className="bg-gray-200 rounded-full h-1.5">
+                            <div 
+                              className={`${colors[action as keyof typeof colors] || 'bg-gray-500'} h-1.5 rounded-full`}
+                              style={{ width: `${percentage}%` }}
+                            ></div>
+                          </div>
+                        </div>
+                      );
+                    });
+                })()}
+              </div>
+            </div>
+
+            {/* File Type Distribution */}
+            <div className="border-b border-gray-100 pb-4">
+              <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                <File className="w-4 h-4 text-purple-600" />
+                File Type Distribution
+              </h4>
+              <div className="space-y-2">
+                {stats?.fileTypes && stats.fileTypes.length > 0 ? (
+                  stats.fileTypes.slice(0, 3).map((fileType) => {
+                    const percentage = stats.totalSize > 0 
+                      ? Math.round((fileType.total_size / stats.totalSize) * 100) 
+                      : 0;
+                    return (
+                      <div key={fileType.file_type} className="flex items-center justify-between">
+                        <span className="text-sm text-gray-600 capitalize">
+                          {fileType.file_type || 'Unknown'}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-gray-500">{fileType.count} files</span>
+                          <span className="text-sm font-semibold text-gray-900">{percentage}%</span>
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="text-sm text-gray-500">No file data available</p>
+                )}
+              </div>
+            </div>
+
+            {/* Storage Insights */}
+            <div className="pb-4">
+              <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                <HardDrive className="w-4 h-4 text-orange-600" />
+                Storage Insights
+              </h4>
+              <div className="space-y-3">
+                <div className="bg-blue-50 rounded-lg p-3">
+                  <div className="flex items-start gap-2">
+                    <TrendingUp className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <div className="text-sm font-medium text-blue-900">Average File Size</div>
+                      <div className="text-xs text-blue-700 mt-1">
+                        {stats && stats.totalFiles > 0 
+                          ? formatFileSize(Math.round(stats.totalSize / stats.totalFiles))
+                          : '0 Bytes'} per file
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="bg-green-50 rounded-lg p-3">
+                  <div className="flex items-start gap-2">
+                    <Folder className="w-4 h-4 text-green-600 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <div className="text-sm font-medium text-green-900">Folder Organization</div>
+                      <div className="text-xs text-green-700 mt-1">
+                        {stats && stats.totalFolders > 0 && stats.totalFiles > 0
+                          ? `${Math.round(stats.totalFiles / stats.totalFolders)} files per folder`
+                          : 'No data available'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-purple-50 rounded-lg p-3">
+                  <div className="flex items-start gap-2">
+                    <Calendar className="w-4 h-4 text-purple-600 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <div className="text-sm font-medium text-purple-900">Recent Activity</div>
+                      <div className="text-xs text-purple-700 mt-1">
+                        {recentActivities.length > 0
+                          ? `${recentActivities.filter(a => {
+                              const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
+                              return new Date(a.created_at) > hourAgo;
+                            }).length} actions in last hour`
+                          : 'No recent activity'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
