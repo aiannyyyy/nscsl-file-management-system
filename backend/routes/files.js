@@ -750,6 +750,8 @@ const validator = require('validator');
 const archiver = require('archiver');
 const unlinkAsync = util.promisify(fs.unlink);
 const mysql = require('mysql2/promise');
+const qpdf = require('node-qpdf2');
+const passwordManager = require('../utils/passwordManager');
 
 
 const { 
@@ -863,10 +865,12 @@ async function addActivityLog(userId, action, targetType, targetId, targetName, 
       'copy': 'COPY'
     };
 
-    const entityTypeMap = {
-      'file': 'FILE',
-      'folder': 'FOLDER'
-    };
+    // ✅ NEW: Separate categories from folders
+        const entityTypeMap = {
+            'category': 'CATEGORY',    // Categories get their own type
+            'folder': 'FOLDER',        // Folders use FOLDER type
+            'file': 'FILE'             // Files use FILE type
+        };
 
     const mappedAction = actionMap[action] || 'CREATE';
     const mappedEntityType = entityTypeMap[targetType] || 'FILE';
@@ -1405,6 +1409,7 @@ router.get("/path/:folderId", async (req, res) => {
   }
 });
 
+/*
 // ================== Download File ==================
 router.get("/download/:id", async (req, res) => {
   const { id } = req.params;
@@ -1460,6 +1465,220 @@ router.get("/download/:id", async (req, res) => {
   } catch (err) {
     console.error("💥 Error downloading file:", err);
     res.status(500).json({ error: "Download failed: " + err.message });
+  }
+});
+*/
+// ================== Download File with PDF Protection ==================
+router.get("/download/:id", async (req, res) => {
+  const { id } = req.params;
+  const { user_id } = req.query;
+  
+  console.log("\n⬇️ ===== DOWNLOAD FILE =====");
+  console.log("📎 File ID:", id);
+  
+  try {
+    console.log("🔍 Querying file details...");
+    const [result] = await db.promise().query("SELECT * FROM files WHERE id = ?", [id]);
+    
+    if (result.length === 0) {
+      console.log("❌ File not found in database:", id);
+      return res.status(404).json({ error: "File not found" });
+    }
+
+    const file = result[0];
+    console.log("📋 File details:", {
+      id: file.id,
+      name: file.file_name,
+      path: file.file_path,
+      size: file.file_size,
+      type: file.file_type
+    });
+    
+    // Validate file path
+    if (!validateFilePath(file.file_path)) {
+      console.log("❌ Invalid file path:", file.file_path);
+      return res.status(400).json({ error: "Invalid file path" });
+    }
+    
+    console.log("🔍 Checking if file exists on disk...");
+    if (!fs.existsSync(file.file_path)) {
+      console.log("❌ File missing on server:", file.file_path);
+      return res.status(404).json({ error: "File missing on server" });
+    }
+
+    // Log the download activity
+    await addActivityLog(file.created_by, "download", "file", file.id, file.file_name);
+
+    // Check if file is PDF and apply security
+    const isPDF = file.file_type && file.file_type.toLowerCase() === 'pdf';
+
+    if (isPDF) {
+      try {
+        // Create temp directory if not exists
+        const tempDir = path.join(__dirname, '../temp');
+        if (!fs.existsSync(tempDir)) {
+          fs.mkdirSync(tempDir, { recursive: true });
+        }
+
+        const timestamp = Date.now();
+        const randomStr = Math.random().toString(36).substring(7);
+        const securedPdfPath = path.join(tempDir, `secured_${timestamp}_${randomStr}.pdf`);
+
+        console.log('🔒 Applying PDF protection with default owner password...');
+
+        // Use default owner password 'nscsl'
+        const ownerPassword = 'nscsl';
+
+        // Save password to storage
+        passwordManager.savePassword(
+          file.id,
+          file.file_name,
+          ownerPassword,
+          user_id || file.created_by
+        );
+
+        // Build QPDF command manually for better control
+        const { execSync } = require('child_process');
+        
+        const qpdfCommand = [
+          'qpdf',
+          '--encrypt',
+          '""',  // User password (empty - no password to open)
+          `"${ownerPassword}"`,  // Owner password (Change Permissions Password)
+          '256',  // Key length
+          '--print=full',  // Allow printing
+          '--modify=none',  // Disable modifications
+          '--extract=n',  // Disable copying
+          '--annotate=n',  // Disable annotations
+          '--form=n',  // Disable form filling
+          '--assemble=n',  // Disable page assembly
+          '--',  // Terminate encryption options
+          `"${file.file_path}"`,  // Input file
+          `"${securedPdfPath}"`  // Output file
+        ].join(' ');
+
+        console.log('📋 Executing QPDF command with owner password: nscsl');
+        console.log('🔐 Restrictions:');
+        console.log('   ✅ Printing: ALLOWED');
+        console.log('   ❌ Editing: DISABLED');
+        console.log('   ❌ Copying: DISABLED');
+        console.log('   ❌ Annotations: DISABLED');
+        console.log('   ❌ Form Filling: DISABLED');
+        console.log('   ❌ Page Assembly: DISABLED');
+
+        try {
+          // Execute QPDF command
+          execSync(qpdfCommand, { 
+            encoding: 'utf8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+            windowsHide: true
+          });
+
+          console.log('✅ PDF secured successfully!');
+
+        } catch (execError) {
+          console.error('❌ QPDF command failed, trying node-qpdf2 method...');
+          
+          // Fallback to node-qpdf2
+          const encryptOptions = {
+            input: file.file_path,
+            output: securedPdfPath,
+            ownerPassword: ownerPassword,
+            userPassword: '',
+            keyLength: 256,
+            restrictions: {
+              print: 'full',
+              modify: 'none',
+              extract: 'n',
+              annotate: 'n',
+              form: 'n',
+              assemble: 'n'
+            }
+          };
+
+          await qpdf.encrypt(encryptOptions);
+          console.log('✅ PDF secured using fallback method');
+        }
+
+        console.log('💾 Owner password saved to:', `temp/pdf_passwords/file_${file.id}.json`);
+
+        // Verify the secured PDF was created
+        if (!fs.existsSync(securedPdfPath)) {
+          throw new Error('Secured PDF file was not created');
+        }
+
+        // Read the secured PDF
+        const securedPdfBuffer = fs.readFileSync(securedPdfPath);
+
+        // Set response headers
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.file_name)}"`);
+        res.setHeader('Content-Length', securedPdfBuffer.length);
+        res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+        res.setHeader('X-PDF-Protection', 'owner-password-enforced');
+        res.setHeader('X-PDF-Encryption', 'AES-256');
+        res.setHeader('X-PDF-Editing', 'DISABLED-WITH-PASSWORD');
+        res.setHeader('X-Owner-Password-Set', 'true');
+        res.setHeader('X-Password-Stored', 'true');
+
+        // Send the secured PDF
+        res.send(securedPdfBuffer);
+
+        // Cleanup temp file after sending
+        setTimeout(() => {
+          try {
+            if (fs.existsSync(securedPdfPath)) {
+              fs.unlinkSync(securedPdfPath);
+              console.log('✅ Temp secured PDF cleaned up');
+            }
+          } catch (cleanupError) {
+            console.error('⚠️  Failed to cleanup temp file:', cleanupError.message);
+          }
+        }, 10000);
+
+      } catch (qpdfError) {
+        console.error('❌ QPDF encryption failed:', qpdfError);
+        
+        // FALLBACK: Send unprotected PDF with warning
+        console.warn('⚠️⚠️⚠️  SENDING UNPROTECTED PDF - QPDF FAILED');
+        
+        res.download(file.file_path, file.file_name, (err) => {
+          if (err) {
+            console.error("💥 Error during download:", err);
+            if (!res.headersSent) {
+              res.status(500).json({ error: "Download failed" });
+            }
+          } else {
+            console.log("✅ Download completed successfully");
+          }
+        });
+      }
+
+    } else {
+      // For non-PDF files, serve normally
+      console.log("✅ Non-PDF file, starting normal download...");
+      
+      res.download(file.file_path, file.file_name, (err) => {
+        if (err) {
+          console.error("💥 Error during download:", err);
+          if (!res.headersSent) {
+            res.status(500).json({ error: "Download failed" });
+          }
+        } else {
+          console.log("✅ Download completed successfully");
+        }
+      });
+    }
+    
+  } catch (err) {
+    console.error("💥 Error downloading file:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Download failed: " + err.message });
+    }
   }
 });
 

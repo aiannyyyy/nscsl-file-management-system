@@ -240,7 +240,8 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
                       {displayDepartment ? `${displayRole} • ${displayDepartment}` : displayRole}
                     </div>
                   </div>
-                  
+                  {
+                  /*
                   <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
                     <User className="w-4 h-4" />
                     Profile Settings
@@ -250,9 +251,9 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
                     <HelpCircle className="w-4 h-4" />
                     Help & Support
                   </button>
-                  
-                  <hr className="my-2" />
-                  
+                  */
+                  }
+                             
                   <button 
                     onClick={handleLogout}
                     className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"

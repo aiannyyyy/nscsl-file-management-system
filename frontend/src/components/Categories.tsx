@@ -30,6 +30,7 @@ import {
   Home,
   File,
   CheckCircle,
+  Eye,
 } from 'lucide-react';
 
 // Icon mapping for categories
@@ -184,7 +185,7 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const CURRENT_USER_ID = currentUser.id?.toString() || '1';
+ const CURRENT_USER_ID = currentUser?.id ? currentUser.id.toString() : '1';
 
   // Fetch data on component mount and when navigation changes
   useEffect(() => {
@@ -208,7 +209,7 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
       setLoading(false);
     }
   };
-
+  /*
   const fetchFilesAndFolders = async () => {
     try {
       setLoading(true);
@@ -249,6 +250,57 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
       setLoading(false);
     }
   };
+  */
+ const fetchFilesAndFolders = async () => {
+  try {
+    setLoading(true);
+    
+    let folderUrl = 'http://localhost:3002/api/folders';
+    const folderParams = new URLSearchParams();
+    if (currentCategoryId) folderParams.append('category_id', currentCategoryId.toString());
+    
+    // ✅ FIXED: Always send parent_folder_id parameter
+    if (currentFolderId === null) {
+      folderParams.append('parent_folder_id', 'null'); // Explicitly send 'null' for root level
+    } else {
+      folderParams.append('parent_folder_id', currentFolderId.toString());
+    }
+    
+    if (folderParams.toString()) folderUrl += `?${folderParams}`;
+    
+    let fileUrl = 'http://localhost:3002/api/files';
+    const fileParams = new URLSearchParams();
+    if (currentCategoryId) fileParams.append('category_id', currentCategoryId.toString());
+    
+    // ✅ FIXED: Always send folder_id parameter for files too
+    if (currentFolderId === null) {
+      fileParams.append('folder_id', 'null');
+    } else {
+      fileParams.append('folder_id', currentFolderId.toString());
+    }
+    
+    if (fileParams.toString()) fileUrl += `?${fileParams}`;
+    
+    const [folderResponse, fileResponse] = await Promise.all([
+      fetch(folderUrl),
+      fetch(fileUrl)
+    ]);
+    
+    if (!folderResponse.ok || !fileResponse.ok) {
+      throw new Error('Failed to fetch data');
+    }
+    
+    const folderData = await folderResponse.json();
+    const fileData = await fileResponse.json();
+    
+    setFolders(folderData.folders || []);
+    setFiles(fileData.files || []);
+  } catch (err) {
+    setError(err instanceof Error ? err.message : 'Failed to fetch data');
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleCategoryDoubleClick = (category: Category) => {
     setCurrentCategoryId(category.id);
@@ -404,7 +456,7 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
       setSubmitting(false);
     }
   };
-
+  /*
   const handleDelete = async () => {
     if (!selectedItem) return;
 
@@ -413,7 +465,17 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
 
     try {
       let response;
-      const deletePayload = { deleted_by: CURRENT_USER_ID };
+      // ✅ Convert to number before sending
+      const deletePayload = { 
+        deleted_by: parseInt(CURRENT_USER_ID) // Convert string to number
+      };
+      
+      console.log('🗑️ Deleting:', { 
+        type: modalType, 
+        id: selectedItem.id, 
+        payload: deletePayload,
+        userId: CURRENT_USER_ID 
+      });
       
       if (modalType === 'category') {
         response = await fetch(`http://localhost:3002/api/categories/${selectedItem.id}`, {
@@ -435,11 +497,18 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
         });
       }
 
+      console.log('Response status:', response?.status);
+
       if (!response?.ok) {
-        const errorData = await response.json();
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        console.error('Delete error response:', errorData);
         throw new Error(errorData?.error || 'Failed to delete');
       }
 
+      const successData = await response.json();
+      console.log('✅ Delete success:', successData);
+
+      // Refresh data
       if (currentView === 'categories') {
         await fetchCategories();
       } else {
@@ -447,12 +516,108 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
       }
       
       closeModal();
+      
     } catch (err) {
+      console.error('❌ Delete error:', err);
       setError(err instanceof Error ? err.message : 'Failed to delete');
     } finally {
       setSubmitting(false);
     }
   };
+  */
+ const handleDelete = async () => {
+  if (!selectedItem) return;
+
+  const userId = currentUser?.id || CURRENT_USER_ID || '1';
+
+  console.log('🗑️ ===== FRONTEND DELETE DEBUG =====');
+  console.log('📦 Selected Item FULL OBJECT:', JSON.stringify(selectedItem, null, 2));
+  console.log('🆔 Item ID:', selectedItem.id);
+  console.log('🔢 Item ID type:', typeof selectedItem.id);
+  console.log('📝 Item name:', selectedItem.name);
+  console.log('🏷️  Modal Type:', modalType);
+  console.log('👤 User ID:', userId);
+  console.log('🔢 User ID type:', typeof userId);
+  
+  // Check if this is actually the file we think it is
+  if (modalType === 'file') {
+    console.log('📄 File Details:');
+    console.log('   - file_type:', selectedItem.file_type);
+    console.log('   - category_id:', selectedItem.category_id);
+    console.log('   - folder_id:', selectedItem.folder_id);
+  }
+  console.log('=====================================\n');
+
+  setSubmitting(true);
+  setError('');
+
+  try {
+    let response;
+    
+    const numericUserId = typeof userId === 'string' ? parseInt(userId) : userId;
+    
+    if (!numericUserId || isNaN(numericUserId)) {
+      throw new Error('Invalid user ID. Please make sure you are logged in.');
+    }
+    
+    const deletePayload = { 
+      deleted_by: numericUserId,
+      updated_by: numericUserId
+    };
+    
+    console.log('📤 DELETE REQUEST:');
+    console.log('   - URL:', `http://localhost:3002/api/categories/files/${selectedItem.id}`);
+    console.log('   - Payload:', JSON.stringify(deletePayload, null, 2));
+    console.log('   - Method: DELETE');
+    
+    if (modalType === 'category') {
+      response = await fetch(`http://localhost:3002/api/categories/${selectedItem.id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(deletePayload)
+      });
+    } else if (modalType === 'folder') {
+      response = await fetch(`http://localhost:3002/categories/api/folders/${selectedItem.id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(deletePayload)
+      });
+    } else if (modalType === 'file') {
+      response = await fetch(`http://localhost:3002/api/categories/files/${selectedItem.id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(deletePayload)
+      });
+    }
+
+    console.log('📥 Response status:', response?.status);
+    console.log('📥 Response ok:', response?.ok);
+
+    if (!response?.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      console.error('❌ Delete error response:', errorData);
+      throw new Error(errorData?.error || 'Failed to delete');
+    }
+
+    const successData = await response.json();
+    console.log('✅ Delete success:', successData);
+
+    // Refresh data
+    if (currentView === 'categories') {
+      await fetchCategories();
+    } else {
+      await fetchFilesAndFolders();
+    }
+    
+    closeModal();
+    
+  } catch (err) {
+    console.error('❌ Delete error:', err);
+    setError(err instanceof Error ? err.message : 'Failed to delete');
+  } finally {
+    setSubmitting(false);
+  }
+};
 
   const handleFileUpload = async () => {
     if (uploadFiles.length === 0) {
@@ -610,20 +775,99 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
 
   const handleDownloadFile = async (file: FileItem) => {
     try {
-      window.open(`http://localhost:3002/api/files/${file.id}/download?user_id=${CURRENT_USER_ID}`, '_blank');
+      // Show loading indicator
+      setError('Preparing secured download...');
+      
+      // Create a download link that forces download (not preview)
+      const downloadUrl = `http://localhost:3002/api/files/${file.id}/download?user_id=${CURRENT_USER_ID}`;
+      
+      // Use fetch to get the file with proper headers
+      const response = await fetch(downloadUrl, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/pdf,*/*'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error('Download failed');
+      }
+
+      // Get the blob
+      const blob = await response.blob();
+      
+      // Create download link
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.original_name; // Use original filename
+      document.body.appendChild(a);
+      a.click();
+      
+      // Cleanup
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      setError(''); // Clear loading message
+      
+      // Show success message
+      const successMsg = isPDFFile(file.file_type) 
+        ? 'PDF downloaded with read-only protection. Editing is restricted.' 
+        : 'File downloaded successfully';
+      
+      // You can add a toast notification here if you have one
+      console.log(successMsg);
+      
     } catch (err) {
-      setError('Download failed');
+      setError('Download failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+    }
+  };
+
+  const handlePreviewFile = async (file: FileItem) => {
+    try {
+      // For preview, open in new tab with preview=true
+      // This shows the file inline in browser
+      const previewUrl = `http://localhost:3002/api/files/${file.id}/download?user_id=${CURRENT_USER_ID}&preview=true`;
+      
+      // Open in new window/tab
+      const newWindow = window.open(previewUrl, '_blank');
+      
+      if (!newWindow) {
+        throw new Error('Popup blocked. Please allow popups for this site.');
+      }
+      
+    } catch (err) {
+      setError('Preview failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+    }
+  };
+
+
+  // Alternative: Preview in modal with iframe (for embedded viewing)
+  const handlePreviewFileInModal = async (file: FileItem) => {
+    try {
+      // This is what you're currently using in the file viewer modal
+      // The iframe src should include preview=true
+      const iframeSrc = `http://localhost:3002/api/files/${file.id}/download?user_id=${CURRENT_USER_ID}&preview=true#toolbar=0`;
+      
+      // Note: Adding #toolbar=0 hides some PDF viewer controls
+      // But this won't prevent downloading if the browser allows it
+      
+      return iframeSrc;
+      
+    } catch (err) {
+      setError('Preview failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+      return '';
     }
   };
 
   const handleStarFile = async (file: FileItem) => {
     try {
-      const response = await fetch(`http://localhost:3002/api/files/${file.id}/star`, {
-        method: 'PATCH',
+      const response = await fetch(`http://localhost:3002/api/files/${file.id}`, {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          user_id: CURRENT_USER_ID, 
-          is_starred: !file.is_starred 
+          is_starred: !file.is_starred,
+          updated_by: CURRENT_USER_ID
         })
       });
 
@@ -709,14 +953,59 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
   };
 
   const getFileTypeIcon = (fileType: string) => {
-    const imageTypes = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'];
-    const documentTypes = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'];
+    const type = fileType.toLowerCase();
     
-    if (imageTypes.includes(fileType.toLowerCase())) {
+    // Images
+    if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'].includes(type)) {
       return <div className="w-5 h-5 bg-green-100 rounded flex items-center justify-center text-green-600 text-xs font-bold">IMG</div>;
-    } else if (documentTypes.includes(fileType.toLowerCase())) {
+    }
+    
+    // PDF
+    if (type === 'pdf') {
+      return <div className="w-5 h-5 bg-red-100 rounded flex items-center justify-center text-red-600 text-xs font-bold">PDF</div>;
+    }
+    
+    // Word Documents
+    if (['doc', 'docx'].includes(type)) {
       return <div className="w-5 h-5 bg-blue-100 rounded flex items-center justify-center text-blue-600 text-xs font-bold">DOC</div>;
     }
+    
+    // Excel Spreadsheets
+    if (['xls', 'xlsx', 'csv'].includes(type)) {
+      return <div className="w-5 h-5 bg-emerald-100 rounded flex items-center justify-center text-emerald-600 text-xs font-bold">XLS</div>;
+    }
+    
+    // PowerPoint Presentations
+    if (['ppt', 'pptx'].includes(type)) {
+      return <div className="w-5 h-5 bg-orange-100 rounded flex items-center justify-center text-orange-600 text-xs font-bold">PPT</div>;
+    }
+    
+    // Text Files
+    if (['txt', 'md', 'log'].includes(type)) {
+      return <div className="w-5 h-5 bg-gray-100 rounded flex items-center justify-center text-gray-600 text-xs font-bold">TXT</div>;
+    }
+    
+    // Code Files
+    if (['js', 'jsx', 'ts', 'tsx', 'html', 'css', 'json', 'xml'].includes(type)) {
+      return <div className="w-5 h-5 bg-purple-100 rounded flex items-center justify-center text-purple-600 text-xs font-bold">CODE</div>;
+    }
+    
+    // Video Files
+    if (['mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', 'mkv'].includes(type)) {
+      return <div className="w-5 h-5 bg-pink-100 rounded flex items-center justify-center text-pink-600 text-xs font-bold">VID</div>;
+    }
+    
+    // Audio Files
+    if (['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac'].includes(type)) {
+      return <div className="w-5 h-5 bg-indigo-100 rounded flex items-center justify-center text-indigo-600 text-xs font-bold">AUD</div>;
+    }
+    
+    // Archive Files
+    if (['zip', 'rar', '7z', 'tar', 'gz'].includes(type)) {
+      return <div className="w-5 h-5 bg-yellow-100 rounded flex items-center justify-center text-yellow-600 text-xs font-bold">ZIP</div>;
+    }
+    
+    // Default
     return <File className="w-5 h-5 text-gray-600" />;
   };
 
@@ -1170,71 +1459,81 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
                     </div>
                   ))}
 
-                  {/* Files - WITH CLICK TO VIEW */}
-                  {(filteredData() as any).files?.map((file: FileItem) => (
-                    <div
-                      key={`file-${file.id}`}
-                      className="group bg-white border border-gray-200 rounded-xl p-6 hover:shadow-md hover:border-gray-300 transition-all duration-200 cursor-pointer"
-                      onClick={() => handleViewFile(file)}
-                    >
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="p-3 bg-blue-50 rounded-lg">
-                          {getFileTypeIcon(file.file_type)}
-                        </div>
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleStarFile(file);
-                            }}
-                            className="p-1 hover:bg-gray-100 rounded transition-colors"
-                          >
-                            {file.is_starred ? (
-                              <Star className="w-4 h-4 text-yellow-600 fill-current" />
-                            ) : (
-                              <StarOff className="w-4 h-4 text-gray-400 hover:text-yellow-600" />
-                            )}
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDownloadFile(file);
-                            }}
-                            className="p-1 hover:bg-gray-100 rounded transition-colors"
-                          >
-                            <Download className="w-4 h-4 text-gray-400 hover:text-green-600" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openModal('delete', 'file', file);
-                            }}
-                            className="p-1 hover:bg-gray-100 rounded transition-colors"
-                          >
-                            <Trash2 className="w-4 h-4 text-gray-400 hover:text-red-600" />
-                          </button>
-                        </div>
-                      </div>
-
-                      <h3 className="font-semibold text-gray-900 mb-2 truncate">
-                        {file.name}
-                      </h3>
-                      
-                      <p className="text-sm text-gray-600 mb-4">
-                        {file.formatted_size} • {file.file_type.toUpperCase()}
-                      </p>
-
-                      <div className="text-sm text-gray-500 mb-3">
-                        {formatDate(file.created_at)}
-                      </div>
-
-                      <div className="pt-3 border-t border-gray-100">
-                        <div className="text-xs text-gray-500">
-                          Created by <span className="font-medium">{file.created_by_name || 'Unknown'}</span>
-                        </div>
-                      </div>
+              {/* Files - WITH CLICK TO VIEW */}
+              {(filteredData() as any).files?.map((file: FileItem) => (
+                <div
+                  key={`file-${file.id}`}
+                  className="group bg-white border border-gray-200 rounded-xl p-6 hover:shadow-md hover:border-gray-300 transition-all duration-200 cursor-pointer"
+                  onClick={() => handleViewFile(file)}
+                >
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="p-3 bg-blue-50 rounded-lg">
+                      {getFileTypeIcon(file.file_type)}
                     </div>
-                  ))}
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <>
+                        {/* Preview button for PDFs and Images */}
+                        {(isPDFFile(file.file_type) || isImageFile(file.file_type)) && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handlePreviewFile(file);
+                            }}
+                            className="p-1 hover:bg-gray-100 rounded transition-colors"
+                            title="Preview (Read-only)"
+                          >
+                            <Eye className="w-4 h-4 text-gray-400 hover:text-blue-600" />
+                          </button>
+                        )}
+                      
+                        
+                        {/* Download button */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDownloadFile(file);
+                          }}
+                          className="p-1 hover:bg-gray-100 rounded transition-colors"
+                          title="Download"
+                        >
+                          <Download className="w-4 h-4 text-gray-400 hover:text-green-600" />
+                        </button>
+                        
+                        {/* Delete button */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openModal('delete', 'file', file);
+                          }}
+                          className="p-1 hover:bg-gray-100 rounded transition-colors"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-4 h-4 text-gray-400 hover:text-red-600" />
+                        </button>
+                      </>
+                    </div>
+                  </div>
+                  {/* ↑↑↑ ADD THIS CLOSING </div> TAG ABOVE THIS LINE ↑↑↑ */}
+
+                  <h3 className="font-semibold text-gray-900 mb-2 truncate">
+                    {file.name}
+                  </h3>
+                  
+                  <p className="text-sm text-gray-600 mb-4">
+                    {file.formatted_size} • {file.file_type.toUpperCase()}
+                  </p>
+
+                  <div className="text-sm text-gray-500 mb-3">
+                    {formatDate(file.created_at)}
+                  </div>
+
+                  <div className="pt-3 border-t border-gray-100">
+                    <div className="text-xs text-gray-500">
+                      Created by <span className="font-medium">{file.created_by_name || 'Unknown'}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
                 </div>
               </div>
             ) : (
@@ -1330,37 +1629,61 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
                         </td>
                         <td className="p-4">
                           <div className="flex items-center gap-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleStarFile(file);
-                              }}
-                              className="p-1 hover:bg-gray-100 rounded transition-colors"
-                            >
-                              {file.is_starred ? (
-                                <Star className="w-4 h-4 text-yellow-600 fill-current" />
-                              ) : (
-                                <StarOff className="w-4 h-4 text-gray-400 hover:text-yellow-600" />
+                            <>
+                              {/* Preview button for PDFs and Images */}
+                              {(isPDFFile(file.file_type) || isImageFile(file.file_type)) && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handlePreviewFile(file);
+                                  }}
+                                  className="p-1 hover:bg-gray-100 rounded transition-colors"
+                                  title="Preview (Read-only)"
+                                >
+                                  <Eye className="w-4 h-4 text-gray-400 hover:text-blue-600" />
+                                </button>
                               )}
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDownloadFile(file);
-                              }}
-                              className="p-1 hover:bg-gray-100 rounded transition-colors"
-                            >
-                              <Download className="w-4 h-4 text-gray-400 hover:text-green-600" />
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openModal('delete', 'file', file);
-                              }}
-                              className="p-1 hover:bg-gray-100 rounded transition-colors"
-                            >
-                              <Trash2 className="w-4 h-4 text-gray-400 hover:text-red-600" />
-                            </button>
+                              
+                              {/* Star button */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleStarFile(file);
+                                }}
+                                className="p-1 hover:bg-gray-100 rounded transition-colors"
+                                title={file.is_starred ? 'Unstar' : 'Star'}
+                              >
+                                {file.is_starred ? (
+                                  <Star className="w-4 h-4 text-yellow-600 fill-current" />
+                                ) : (
+                                  <StarOff className="w-4 h-4 text-gray-400 hover:text-yellow-600" />
+                                )}
+                              </button>
+                              
+                              {/* Download button */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDownloadFile(file);
+                                }}
+                                className="p-1 hover:bg-gray-100 rounded transition-colors"
+                                title="Download"
+                              >
+                                <Download className="w-4 h-4 text-gray-400 hover:text-green-600" />
+                              </button>
+                              
+                              {/* Delete button */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openModal('delete', 'file', file);
+                                }}
+                                className="p-1 hover:bg-gray-100 rounded transition-colors"
+                                title="Delete"
+                              >
+                                <Trash2 className="w-4 h-4 text-gray-400 hover:text-red-600" />
+                              </button>
+                            </>
                           </div>
                         </td>
                       </tr>
@@ -1712,12 +2035,35 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
                         <label className="block text-sm font-medium text-gray-700 mb-1">
                           Color
                         </label>
-                        <input
-                          type="color"
-                          value={categoryForm.color}
-                          onChange={(e) => setCategoryForm({ ...categoryForm, color: e.target.value })}
-                          className="w-full h-10 border border-gray-300 rounded-lg cursor-pointer"
-                        />
+                        <div className="grid grid-cols-5 gap-2">
+                          {[
+                            { hex: '#007bff', name: 'Blue' },
+                            { hex: '#28a745', name: 'Green' },
+                            { hex: '#dc3545', name: 'Red' },
+                            { hex: '#ffc107', name: 'Yellow' },
+                            { hex: '#6f42c1', name: 'Purple' },
+                            { hex: '#fd7e14', name: 'Orange' },
+                            { hex: '#20c997', name: 'Teal' },
+                            { hex: '#e83e8c', name: 'Pink' },
+                            { hex: '#6c757d', name: 'Gray' }
+                          ].map((color) => (
+                            <button
+                              key={color.hex}
+                              type="button"
+                              onClick={() => setCategoryForm({ ...categoryForm, color: color.hex })}
+                              className={`h-10 rounded-lg border-2 transition-all ${
+                                categoryForm.color === color.hex 
+                                  ? 'border-gray-900 ring-2 ring-gray-900 ring-offset-2' 
+                                  : 'border-gray-300 hover:border-gray-400'
+                              }`}
+                              style={{ backgroundColor: color.hex }}
+                              title={color.name}
+                            />
+                          ))}
+                        </div>
+                        <div className="mt-2 text-xs text-gray-500">
+                          Selected: {categoryForm.color}
+                        </div>
                       </div>
 
                       <div>
@@ -1830,34 +2176,55 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleStarFile(viewingFile);
-                    }}
-                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                    title={viewingFile.is_starred ? 'Unstar' : 'Star'}
-                  >
-                    {viewingFile.is_starred ? (
-                      <Star className="w-5 h-5 text-yellow-600 fill-current" />
-                    ) : (
-                      <StarOff className="w-5 h-5 text-gray-600" />
+                  <>
+                    {/* Preview button */}
+                    {(isPDFFile(viewingFile.file_type) || isImageFile(viewingFile.file_type)) && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePreviewFile(viewingFile);
+                        }}
+                        className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                        title="Open in new tab (Read-only)"
+                      >
+                        <Eye className="w-5 h-5 text-gray-600" />
+                      </button>
                     )}
-                  </button>
-                  <button
-                    onClick={() => handleDownloadFile(viewingFile)}
-                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                    title="Download"
-                  >
-                    <Download className="w-5 h-5 text-gray-600" />
-                  </button>
-                  <button
-                    onClick={closeFileViewer}
-                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                    title="Close"
-                  >
-                    <X className="w-5 h-5 text-gray-600" />
-                  </button>
+                    
+                    {/* Star button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleStarFile(viewingFile);
+                      }}
+                      className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                      title={viewingFile.is_starred ? 'Unstar' : 'Star'}
+                    >
+                      {viewingFile.is_starred ? (
+                        <Star className="w-5 h-5 text-yellow-600 fill-current" />
+                      ) : (
+                        <StarOff className="w-5 h-5 text-gray-600" />
+                      )}
+                    </button>
+                    
+                    {/* Download button */}
+                    <button
+                      onClick={() => handleDownloadFile(viewingFile)}
+                      className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                      title="Download (Secured)"
+                    >
+                      <Download className="w-5 h-5 text-gray-600" />
+                    </button>
+                    
+                    {/* Close button */}
+                    <button
+                      onClick={closeFileViewer}
+                      className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                      title="Close"
+                    >
+                      <X className="w-5 h-5 text-gray-600" />
+                    </button>
+                  </>
                 </div>
               </div>
 
@@ -1892,7 +2259,6 @@ const FileManagement: React.FC<FileManagementProps> = ({ currentUser }) => {
                 ) : isAudioFile(viewingFile.file_type) ? (
                   <div className="flex items-center justify-center h-full">
                     <div className="bg-white rounded-lg shadow-lg p-8 max-w-md w-full">
-                      {/* ... */}
                       <audio 
                         controls
                         className="w-full"
