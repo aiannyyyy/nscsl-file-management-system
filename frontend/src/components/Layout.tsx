@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   Menu,
   X,
@@ -7,14 +7,17 @@ import {
   FileText,
   Settings,
   Search,
-  Bell,
   User,
   FolderOpen,
   ChevronDown,
   Building2,
-  HelpCircle,
-  LogOut
+  LogOut,
+  Folder,
+  ChevronRight,
+  Loader2,
+  XCircle
 } from "lucide-react";
+import axios from "axios";
 
 interface User {
   id?: string | number;
@@ -22,7 +25,7 @@ interface User {
   user_name: string;
   department?: string;
   role: string;
-  email?: string; // Made optional to match App.tsx interface
+  email?: string;
 }
 
 interface UserData {
@@ -36,15 +39,97 @@ type LayoutProps = {
   onLogout: () => void;
 };
 
+interface SearchFile {
+  id: number;
+  file_name: string;
+  file_type: string;
+  file_size: number;
+  folder_id: number | null;
+  folder_name: string | null;
+  created_at: string;
+  created_by_name: string;
+}
+
+interface SearchFolder {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  parent_folder_name: string | null;
+  created_at: string;
+  created_by_name: string;
+}
+
+interface CategoryFile {
+  id: number;
+  name: string;
+  original_name: string;
+  file_type: string;
+  file_size: number;
+  category_id: number;
+  folder_id: number | null;
+  category_name: string;
+  folder_name: string | null;
+  created_at: string;
+  created_by_name: string;
+}
+
+interface CategoryFolder {
+  id: number;
+  name: string;
+  category_id: number;
+  category_name: string;
+  parent_folder_id: number | null;
+  created_by_name: string;
+}
+
+interface Category {
+  id: number;
+  name: string;
+  description: string;
+  color: string;
+  icon: string;
+  created_by_name: string;
+}
+
+interface SearchResults {
+  files: SearchFile[];
+  folders: SearchFolder[];
+  categoryFiles: CategoryFile[];
+  categoryFolders: CategoryFolder[];
+  categories: Category[];
+  totalResults: number;
+}
+
 export default function Layout({ children, userData, onLogout }: LayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
 
-  // Ensure component is mounted before using location
+  // Search states
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResults>({
+    files: [],
+    folders: [],
+    categoryFiles: [],
+    categoryFolders: [],
+    categories: [],
+    totalResults: 0
+  });
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  
+  const searchRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     setMounted(true);
+    const saved = localStorage.getItem('recentSearches');
+    if (saved) {
+      setRecentSearches(JSON.parse(saved));
+    }
   }, []);
 
   const toggleSidebar = () => {
@@ -61,19 +146,174 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
     return location.pathname === path;
   };
 
-  // Close dropdown when clicking outside
   useEffect(() => {
-    const handleClickOutside = () => {
+    const handleClickOutside = (e: MouseEvent) => {
       if (userDropdownOpen) {
         setUserDropdownOpen(false);
       }
+      if (searchOpen && searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setSearchOpen(false);
+      }
     };
 
-    if (userDropdownOpen) {
-      document.addEventListener('click', handleClickOutside);
-      return () => document.removeEventListener('click', handleClickOutside);
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [userDropdownOpen, searchOpen]);
+
+  const performSearch = async (query: string) => {
+    if (!query.trim()) {
+      setSearchResults({ 
+        files: [], 
+        folders: [], 
+        categoryFiles: [], 
+        categoryFolders: [],
+        categories: [],
+        totalResults: 0 
+      });
+      return;
     }
-  }, [userDropdownOpen]);
+
+    setSearchLoading(true);
+    try {
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3002';
+      
+      const [regularSearch, categorySearch] = await Promise.all([
+        axios.get(`${API_URL}/api/files/search?q=${encodeURIComponent(query)}`, {
+          headers: { Authorization: `Bearer ${userData.token}` }
+        }).catch(() => ({ 
+          data: { results: { files: [], folders: [] }, totalResults: 0 } 
+        })),
+        
+        axios.get(`${API_URL}/api/search?q=${encodeURIComponent(query)}`, {
+          headers: { Authorization: `Bearer ${userData.token}` }
+        }).catch((err) => {
+          console.error('Category search error:', err.response?.data || err.message);
+          return { 
+            data: { results: { files: [], folders: [], categories: [] }, totalResults: 0 } 
+          };
+        })
+      ]);
+
+      const results: SearchResults = {
+        files: regularSearch.data.results?.files || [],
+        folders: regularSearch.data.results?.folders || [],
+        categoryFiles: categorySearch.data.results?.files || [],
+        categoryFolders: categorySearch.data.results?.folders || [],
+        categories: categorySearch.data.results?.categories || [],
+        totalResults: (regularSearch.data.totalResults || 0) + (categorySearch.data.totalResults || 0)
+      };
+
+      console.log('Search results:', results);
+      setSearchResults(results);
+    } catch (error) {
+      console.error('Search error:', error);
+      setSearchResults({ 
+        files: [], 
+        folders: [], 
+        categoryFiles: [], 
+        categoryFolders: [],
+        categories: [],
+        totalResults: 0 
+      });
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (searchQuery) {
+        performSearch(searchQuery);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setSearchQuery(value);
+    setSearchOpen(value.length > 0);
+  };
+
+  const saveRecentSearch = (query: string) => {
+    const updated = [query, ...recentSearches.filter(s => s !== query)].slice(0, 5);
+    setRecentSearches(updated);
+    localStorage.setItem('recentSearches', JSON.stringify(updated));
+  };
+
+  const handleFileClick = (file: SearchFile) => {
+    saveRecentSearch(file.file_name);
+    setSearchOpen(false);
+    setSearchQuery("");
+    
+    if (file.folder_id) {
+      navigate(`/files?folder=${file.folder_id}&highlight=${file.id}`);
+    } else {
+      navigate(`/files?highlight=${file.id}`);
+    }
+  };
+
+  const handleFolderClick = (folder: SearchFolder) => {
+    saveRecentSearch(folder.name);
+    setSearchOpen(false);
+    setSearchQuery("");
+    navigate(`/files?folder=${folder.id}`);
+  };
+
+  const handleCategoryFileClick = (file: CategoryFile) => {
+    saveRecentSearch(file.name);
+    setSearchOpen(false);
+    setSearchQuery("");
+    navigate(`/categories?category=${file.category_id}&folder=${file.folder_id || ''}&highlight=${file.id}`);
+  };
+
+  const handleCategoryClick = (category: Category) => {
+    saveRecentSearch(category.name);
+    setSearchOpen(false);
+    setSearchQuery("");
+    navigate(`/categories?category=${category.id}`);
+  };
+
+  const handleCategoryFolderClick = (folder: CategoryFolder) => {
+    saveRecentSearch(folder.name);
+    setSearchOpen(false);
+    setSearchQuery("");
+    navigate(`/categories?category=${folder.category_id}&folder=${folder.id}`);
+  };
+
+  const clearSearch = () => {
+    setSearchQuery("");
+    setSearchOpen(false);
+    setSearchResults({ 
+      files: [], 
+      folders: [], 
+      categoryFiles: [], 
+      categoryFolders: [],
+      categories: [],
+      totalResults: 0 
+    });
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  const getFileIcon = (fileType: string) => {
+    const type = fileType?.toLowerCase();
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(type)) return '🖼️';
+    if (['pdf'].includes(type)) return '📄';
+    if (['doc', 'docx'].includes(type)) return '📝';
+    if (['xls', 'xlsx'].includes(type)) return '📊';
+    if (['zip', 'rar', '7z'].includes(type)) return '🗜️';
+    if (['mp4', 'avi', 'mov'].includes(type)) return '🎥';
+    if (['mp3', 'wav'].includes(type)) return '🎵';
+    return '📄';
+  };
 
   const navItems = [
     { path: "/dashboard", label: "Dashboard", icon: Home },
@@ -82,7 +322,6 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
     { path: "/settings", label: "Settings", icon: Settings }
   ];
 
-  // Safely get user display information
   const displayName = userData?.user?.name || "Unknown User";
   const displayEmail = userData?.user?.email || userData?.user?.user_name || "No email";
   const displayRole = userData?.user?.role || "User";
@@ -96,7 +335,6 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
           sidebarCollapsed ? "w-16" : "w-64"
         } bg-blue-700 text-white flex flex-col transition-all duration-300 ease-in-out relative z-50`}
       >
-        {/* Logo/Brand Section */}
         <div className="p-4 border-b border-blue-600 flex items-center justify-between">
           {!sidebarCollapsed ? (
             <div className="flex items-center gap-3">
@@ -115,7 +353,6 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
           )}
         </div>
 
-        {/* Navigation */}
         <nav className="flex-1 p-4 space-y-2">
           {navItems.map((item) => {
             const Icon = item.icon;
@@ -144,7 +381,6 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
           })}
         </nav>
 
-        {/* User Profile Section */}
         {!sidebarCollapsed && (
           <div className="p-4 border-t border-blue-600">
             <div className="flex items-center gap-3 text-sm">
@@ -162,12 +398,9 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
         )}
       </aside>
 
-      {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Top Header */}
         <header className="h-16 bg-white shadow-sm border-b border-gray-200 flex items-center justify-between px-6 relative z-40">
           <div className="flex items-center gap-4">
-            {/* Sidebar Toggle Button */}
             <button
               onClick={toggleSidebar}
               className="p-2 hover:bg-gray-100 rounded-lg transition-colors duration-200"
@@ -180,7 +413,6 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
               )}
             </button>
 
-            {/* Company Info */}
             <div className="hidden md:block">
               <h1 className="text-xl font-semibold text-gray-900">
                 NSCSL Intranet File Management System
@@ -191,26 +423,229 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
             </div>
           </div>
 
-          {/* Right Section */}
           <div className="flex items-center gap-4">
-            {/* Search Bar */}
-            <div className="hidden lg:flex relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+            {/* Enhanced Search Bar */}
+            <div className="hidden lg:flex relative" ref={searchRef}>
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4 z-10" />
               <input
+                ref={searchInputRef}
                 type="text"
-                placeholder="Search files..."
-                className="pl-10 pr-4 py-2 w-64 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
+                placeholder="Search files, folders, categories..."
+                value={searchQuery}
+                onChange={handleSearchChange}
+                onFocus={() => searchQuery && setSearchOpen(true)}
+                className="pl-10 pr-10 py-2 w-80 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
               />
+              {searchQuery && (
+                <button
+                  onClick={clearSearch}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 z-10"
+                >
+                  <XCircle className="w-4 h-4" />
+                </button>
+              )}
+
+              {/* Search Dropdown */}
+              {searchOpen && (
+                <div className="absolute top-full mt-2 w-[500px] bg-white rounded-lg shadow-xl border border-gray-200 max-h-[600px] overflow-y-auto z-50">
+                  {searchLoading ? (
+                    <div className="p-8 flex items-center justify-center">
+                      <Loader2 className="w-6 h-6 animate-spin text-blue-500" />
+                      <span className="ml-2 text-gray-600">Searching...</span>
+                    </div>
+                  ) : searchResults.totalResults === 0 && searchQuery ? (
+                    <div className="p-8 text-center">
+                      <p className="text-gray-500">No results found for "{searchQuery}"</p>
+                      {recentSearches.length > 0 && (
+                        <div className="mt-4">
+                          <p className="text-sm text-gray-400 mb-2">Recent searches:</p>
+                          <div className="flex flex-wrap gap-2 justify-center">
+                            {recentSearches.map((term, idx) => (
+                              <button
+                                key={idx}
+                                onClick={() => setSearchQuery(term)}
+                                className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded-full text-gray-600"
+                              >
+                                {term}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      {/* Categories Section */}
+                      {searchResults.categories.length > 0 && (
+                        <div className="border-b border-gray-100">
+                          <div className="px-4 py-2 bg-gray-50 font-semibold text-xs text-gray-500 uppercase">
+                            Categories ({searchResults.categories.length})
+                          </div>
+                          {searchResults.categories.map((category) => (
+                            <button
+                              key={`category-${category.id}`}
+                              onClick={() => handleCategoryClick(category)}
+                              className="w-full px-4 py-3 hover:bg-blue-50 transition-colors flex items-start gap-3 border-b border-gray-50 last:border-0"
+                            >
+                              <FolderOpen className="w-5 h-5 text-purple-500 flex-shrink-0 mt-0.5" />
+                              <div className="flex-1 text-left">
+                                <div className="font-medium text-gray-900">{category.name}</div>
+                                {category.description && (
+                                  <div className="text-xs text-gray-500 mt-1">{category.description}</div>
+                                )}
+                              </div>
+                              <ChevronRight className="w-4 h-4 text-gray-400" />
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Category Folders Section */}
+                      {searchResults.categoryFolders.length > 0 && (
+                        <div className="border-b border-gray-100">
+                          <div className="px-4 py-2 bg-gray-50 font-semibold text-xs text-gray-500 uppercase">
+                            Category Folders ({searchResults.categoryFolders.length})
+                          </div>
+                          {searchResults.categoryFolders.map((folder) => (
+                            <button
+                              key={`cat-folder-${folder.id}`}
+                              onClick={() => handleCategoryFolderClick(folder)}
+                              className="w-full px-4 py-3 hover:bg-blue-50 transition-colors flex items-start gap-3 border-b border-gray-50 last:border-0"
+                            >
+                              <Folder className="w-5 h-5 text-indigo-500 flex-shrink-0 mt-0.5" />
+                              <div className="flex-1 text-left">
+                                <div className="font-medium text-gray-900">{folder.name}</div>
+                                <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
+                                  <span className="px-2 py-0.5 bg-purple-100 text-purple-600 rounded">
+                                    {folder.category_name}
+                                  </span>
+                                  <span>•</span>
+                                  <span>by {folder.created_by_name}</span>
+                                </div>
+                              </div>
+                              <ChevronRight className="w-4 h-4 text-gray-400" />
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Folders Section */}
+                      {searchResults.folders.length > 0 && (
+                        <div className="border-b border-gray-100">
+                          <div className="px-4 py-2 bg-gray-50 font-semibold text-xs text-gray-500 uppercase">
+                            Folders ({searchResults.folders.length})
+                          </div>
+                          {searchResults.folders.map((folder) => (
+                            <button
+                              key={`folder-${folder.id}`}
+                              onClick={() => handleFolderClick(folder)}
+                              className="w-full px-4 py-3 hover:bg-blue-50 transition-colors flex items-start gap-3 border-b border-gray-50 last:border-0"
+                            >
+                              <Folder className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" />
+                              <div className="flex-1 text-left">
+                                <div className="font-medium text-gray-900">{folder.name}</div>
+                                <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
+                                  {folder.parent_folder_name && (
+                                    <>
+                                      <span>in {folder.parent_folder_name}</span>
+                                      <span>•</span>
+                                    </>
+                                  )}
+                                  <span>by {folder.created_by_name}</span>
+                                </div>
+                              </div>
+                              <ChevronRight className="w-4 h-4 text-gray-400" />
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Regular Files Section */}
+                      {searchResults.files.length > 0 && (
+                        <div className="border-b border-gray-100">
+                          <div className="px-4 py-2 bg-gray-50 font-semibold text-xs text-gray-500 uppercase">
+                            Files ({searchResults.files.length})
+                          </div>
+                          {searchResults.files.map((file) => (
+                            <button
+                              key={`file-${file.id}`}
+                              onClick={() => handleFileClick(file)}
+                              className="w-full px-4 py-3 hover:bg-blue-50 transition-colors flex items-start gap-3 border-b border-gray-50 last:border-0"
+                            >
+                              <div className="text-2xl flex-shrink-0">
+                                {getFileIcon(file.file_type)}
+                              </div>
+                              <div className="flex-1 text-left">
+                                <div className="font-medium text-gray-900">{file.file_name}</div>
+                                <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
+                                  <span>{file.file_type?.toUpperCase()}</span>
+                                  <span>•</span>
+                                  <span>{formatFileSize(file.file_size)}</span>
+                                  {file.folder_name && (
+                                    <>
+                                      <span>•</span>
+                                      <span>in {file.folder_name}</span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                              <ChevronRight className="w-4 h-4 text-gray-400" />
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Category Files Section */}
+                      {searchResults.categoryFiles.length > 0 && (
+                        <div>
+                          <div className="px-4 py-2 bg-gray-50 font-semibold text-xs text-gray-500 uppercase">
+                            Category Files ({searchResults.categoryFiles.length})
+                          </div>
+                          {searchResults.categoryFiles.map((file) => (
+                            <button
+                              key={`cat-file-${file.id}`}
+                              onClick={() => handleCategoryFileClick(file)}
+                              className="w-full px-4 py-3 hover:bg-blue-50 transition-colors flex items-start gap-3 border-b border-gray-50 last:border-0"
+                            >
+                              <div className="text-2xl flex-shrink-0">
+                                {getFileIcon(file.file_type)}
+                              </div>
+                              <div className="flex-1 text-left">
+                                <div className="font-medium text-gray-900">{file.name}</div>
+                                <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
+                                  <span className="px-2 py-0.5 bg-purple-100 text-purple-600 rounded">
+                                    {file.category_name}
+                                  </span>
+                                  <span>•</span>
+                                  <span>{file.file_type?.toUpperCase()}</span>
+                                  <span>•</span>
+                                  <span>{formatFileSize(file.file_size)}</span>
+                                  {file.folder_name && (
+                                    <>
+                                      <span>•</span>
+                                      <span>in {file.folder_name}</span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                              <ChevronRight className="w-4 h-4 text-gray-400" />
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Footer */}
+                      {searchResults.totalResults > 0 && (
+                        <div className="px-4 py-3 bg-gray-50 text-center text-xs text-gray-500">
+                          Showing {searchResults.totalResults} result{searchResults.totalResults !== 1 ? 's' : ''}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
-
-            {/* Notifications */}
-            <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors duration-200 relative">
-              <Bell className="w-5 h-5 text-gray-600" />
-              <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full flex items-center justify-center">
-                <span className="text-xs text-white font-bold">3</span>
-              </span>
-            </button>
-
+            
             {/* User Menu */}
             <div className="relative">
               <button
@@ -230,7 +665,6 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
                 <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${userDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
 
-              {/* User Dropdown */}
               {userDropdownOpen && (
                 <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
                   <div className="px-4 py-2 border-b border-gray-100">
@@ -240,19 +674,6 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
                       {displayDepartment ? `${displayRole} • ${displayDepartment}` : displayRole}
                     </div>
                   </div>
-                  {
-                  /*
-                  <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
-                    <User className="w-4 h-4" />
-                    Profile Settings
-                  </button>
-                  
-                  <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
-                    <HelpCircle className="w-4 h-4" />
-                    Help & Support
-                  </button>
-                  */
-                  }
                              
                   <button 
                     onClick={handleLogout}
@@ -267,7 +688,6 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
           </div>
         </header>
 
-        {/* Page content */}
         <main className="flex-1 p-6 overflow-y-auto bg-gray-50">
           <div className="max-w-full">
             {children}
@@ -275,7 +695,6 @@ export default function Layout({ children, userData, onLogout }: LayoutProps) {
         </main>
       </div>
 
-      {/* Mobile Sidebar Overlay */}
       {!sidebarCollapsed && (
         <div
           className="fixed inset-0 bg-black bg-opacity-50 z-30 lg:hidden"

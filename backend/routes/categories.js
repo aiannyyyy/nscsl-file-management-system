@@ -2224,6 +2224,85 @@ router.post('/test-pdf-protection', async (req, res) => {
   }
 });
 
+// ================== Universal Search Endpoint (ADD THIS) ==================
+router.get('/search', async (req, res) => {
+  try {
+    const { q: query, limit = 50 } = req.query;
+    
+    console.log('🔍 ===== UNIVERSAL SEARCH =====');
+    console.log('Query:', query);
+    
+    if (!query || query.trim() === '') {
+      return res.status(400).json({ error: "Search query 'q' is required" });
+    }
+    
+    const searchTerm = `%${sanitizeInput(query)}%`;
+    const searchLimit = parseInt(limit);
+    
+    console.log('🔍 Searching with term:', searchTerm);
+    
+    // Search categories
+    console.log('🔍 Searching categories...');
+    const [categories] = await db.promise().query(
+      `SELECT c.*, u.name as created_by_name
+       FROM categories c
+       LEFT JOIN users u ON c.created_by = u.id
+       WHERE c.name LIKE ? OR c.description LIKE ?
+       ORDER BY c.name ASC
+       LIMIT ?`,
+      [searchTerm, searchTerm, searchLimit]
+    );
+    console.log('✅ Found categories:', categories.length);
+    
+    // Search folders
+    console.log('🔍 Searching folders...');
+    const [folders] = await db.promise().query(
+      `SELECT f.*, c.name as category_name, u.name as created_by_name
+       FROM categories_folders f
+       LEFT JOIN categories c ON f.category_id = c.id
+       LEFT JOIN users u ON f.created_by = u.id
+       WHERE f.name LIKE ? OR f.description LIKE ?
+       ORDER BY f.name ASC
+       LIMIT ?`,
+      [searchTerm, searchTerm, searchLimit]
+    );
+    console.log('✅ Found folders:', folders.length);
+    
+    // Search files
+    console.log('🔍 Searching files...');
+    const [files] = await db.promise().query(
+      `SELECT f.*, c.name as category_name, cf.name as folder_name, u.name as created_by_name
+       FROM categories_files f
+       LEFT JOIN categories c ON f.category_id = c.id
+       LEFT JOIN categories_folders cf ON f.folder_id = cf.id
+       LEFT JOIN users u ON f.created_by = u.id
+       WHERE f.name LIKE ? OR f.original_name LIKE ? OR f.description LIKE ?
+       ORDER BY f.name ASC
+       LIMIT ?`,
+      [searchTerm, searchTerm, searchTerm, searchLimit]
+    );
+    console.log('✅ Found files:', files.length);
+    
+    const totalResults = categories.length + folders.length + files.length;
+    
+    console.log(`✅ Search completed: ${totalResults} total results`);
+    
+    res.json({
+      message: "Search completed successfully",
+      query: query.trim(),
+      results: {
+        categories: categories || [],
+        folders: folders || [],
+        files: files || []
+      },
+      totalResults: totalResults
+    });
+    
+  } catch (error) {
+    console.error("💥 Error in universal search:", error);
+    res.status(500).json({ error: "Search failed: " + error.message });
+  }
+});
 
 // ================== Error Handler Middleware ==================
 router.use(handleMulterError);

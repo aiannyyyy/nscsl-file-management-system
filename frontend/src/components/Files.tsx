@@ -34,6 +34,15 @@ import {
   Mail
 } from 'lucide-react';
 
+// Add authentication helper
+const getAuthHeaders = () => {
+  const token = localStorage.getItem('token'); // Adjust based on where you store your token
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`
+  };
+};
+
 interface FileItem {
   id: string;
   folder_id?: string;
@@ -220,11 +229,17 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
     setLoading(true);
     setError(null);
     try {
+      const token = localStorage.getItem('token');
       const url = currentFolder 
         ? `${API_BASE}/list/${currentFolder}` 
         : `${API_BASE}/list`;
       
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: Failed to load files`);
       }
@@ -260,40 +275,49 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
   };
 
   const loadFolderPath = async () => {
-    if (!currentFolder) return;
+  if (!currentFolder) return;
+  
+  try {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${API_BASE}/path/${currentFolder}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    if (!response.ok) throw new Error('Failed to load folder path');
     
-    try {
-      const response = await fetch(`${API_BASE}/path/${currentFolder}`);
-      if (!response.ok) throw new Error('Failed to load folder path');
-      
-      const data = await response.json();
-      const breadcrumbs = [
-        { name: 'Home', path: '/', id: null },
-        ...data.path.map((folder: any) => ({
-          name: folder.name,
-          path: folder.id,
-          id: folder.id
-        }))
-      ];
-      
-      setFolderPath(breadcrumbs);
-    } catch (err) {
-      console.error('Error loading folder path:', err);
-    }
-  };
+    const data = await response.json();
+    const breadcrumbs = [
+      { name: 'Home', path: '/', id: null },
+      ...data.path.map((folder: any) => ({
+        name: folder.name,
+        path: folder.id,
+        id: folder.id
+      }))
+    ];
+    
+    setFolderPath(breadcrumbs);
+  } catch (err) {
+    console.error('Error loading folder path:', err);
+  }
+};
 
-  // Add this function to fetch users from your backend
   const fetchUsers = async () => {
-    try {
-      const response = await fetch('http://localhost:3002/api/users'); // Adjust your API endpoint
-      if (!response.ok) throw new Error('Failed to fetch users');
-      const users = await response.json();
-      setAvailableUsers(users);
-    } catch (err) {
-      console.error('Error fetching users:', err);
-      setError('Failed to load users');
-    }
-  };
+  try {
+    const token = localStorage.getItem('token'); // Get token from localStorage
+    const response = await fetch('http://localhost:3002/api/files/api/users', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    if (!response.ok) throw new Error('Failed to fetch users');
+    const users = await response.json();
+    setAvailableUsers(users);
+  } catch (err) {
+    console.error('Error fetching users:', err);
+    setError('Failed to load users');
+  }
+};
 
   // Combined files and folders for display
   const allItems = useMemo(() => {
@@ -351,6 +375,8 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
     const results = { successful: 0, failed: 0, errors: [] as any[] };
 
     try {
+      const token = localStorage.getItem('token');
+      
       if (uploadFiles.length === 1) {
         // Single file upload
         const file = uploadFiles[0];
@@ -363,6 +389,9 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
 
         const response = await fetch(`${API_BASE}/upload`, {
           method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`
+          },
           body: formData
         });
 
@@ -388,6 +417,9 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
 
         const response = await fetch(`${API_BASE}/upload/multiple`, {
           method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`
+          },
           body: formData
         });
 
@@ -423,205 +455,227 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
   };
 
   const handleCreateFolder = async () => {
-    if (!newFolderName.trim()) return;
+  if (!newFolderName.trim()) return;
 
-    setIsCreatingFolder(true);
-    try {
-      const response = await fetch(`${API_BASE}/folders`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          name: newFolderName.trim(),
-          parent_id: currentFolder,
-          created_by: CURRENT_USER_ID
-        })
-      });
+  setIsCreatingFolder(true);
+  try {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${API_BASE}/folders`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        name: newFolderName.trim(),
+        parent_id: currentFolder,
+        created_by: CURRENT_USER_ID
+      })
+    });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to create folder');
-      }
-
-      const result = await response.json();
-      setSuccess(`Folder "${newFolderName}" created successfully!`);
-      
-      setShowFolderModal(false);
-      setNewFolderName('');
-      loadFilesAndFolders();
-    } catch (err) {
-      console.error('Create folder error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to create folder');
-    } finally {
-      setIsCreatingFolder(false);
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to create folder');
     }
-  };
+
+    const result = await response.json();
+    setSuccess(`Folder "${newFolderName}" created successfully!`);
+    
+    setShowFolderModal(false);
+    setNewFolderName('');
+    loadFilesAndFolders();
+  } catch (err) {
+    console.error('Create folder error:', err);
+    setError(err instanceof Error ? err.message : 'Failed to create folder');
+  } finally {
+    setIsCreatingFolder(false);
+  }
+};
 
   const handleRename = async () => {
-    if (!itemToRename || !newName.trim()) return;
+  if (!itemToRename || !newName.trim()) return;
 
-    setIsRenaming(true);
-    try {
-      const response = await fetch(`${API_BASE}/${itemToRename.id}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          new_name: newName.trim(),
-          updated_by: CURRENT_USER_ID
-        })
-      });
+  setIsRenaming(true);
+  try {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${API_BASE}/${itemToRename.id}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        new_name: newName.trim(),
+        updated_by: CURRENT_USER_ID
+      })
+    });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to rename item');
-      }
-
-      const result = await response.json();
-      setSuccess(`"${itemToRename.name}" renamed to "${newName.trim()}" successfully!`);
-      
-      setShowRenameModal(false);
-      setItemToRename(null);
-      setNewName('');
-      loadFilesAndFolders();
-    } catch (err) {
-      console.error('Rename error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to rename item');
-    } finally {
-      setIsRenaming(false);
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to rename item');
     }
-  };
+
+    const result = await response.json();
+    setSuccess(`"${itemToRename.name}" renamed to "${newName.trim()}" successfully!`);
+    
+    setShowRenameModal(false);
+    setItemToRename(null);
+    setNewName('');
+    loadFilesAndFolders();
+  } catch (err) {
+    console.error('Rename error:', err);
+    setError(err instanceof Error ? err.message : 'Failed to rename item');
+  } finally {
+    setIsRenaming(false);
+  }
+};
 
   const handleDelete = async (itemId: string) => {
-    if (!confirm('Are you sure you want to delete this item?')) return;
+  if (!confirm('Are you sure you want to delete this item?')) return;
 
-    try {
-      const response = await fetch(`${API_BASE}/${itemId}`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          updated_by: CURRENT_USER_ID
-        })
-      });
+  try {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${API_BASE}/${itemId}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        updated_by: CURRENT_USER_ID
+      })
+    });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to delete item');
-      }
-
-      const result = await response.json();
-      setSuccess('Item deleted successfully!');
-      setSelectedFiles(prev => prev.filter(id => id !== itemId));
-      loadFilesAndFolders();
-    } catch (err) {
-      console.error('Delete error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to delete item');
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to delete item');
     }
-  };
+
+    const result = await response.json();
+    setSuccess('Item deleted successfully!');
+    setSelectedFiles(prev => prev.filter(id => id !== itemId));
+    loadFilesAndFolders();
+  } catch (err) {
+    console.error('Delete error:', err);
+    setError(err instanceof Error ? err.message : 'Failed to delete item');
+  }
+};
 
   const handleBulkDelete = async () => {
-    if (selectedFiles.length === 0) return;
-    if (!confirm(`Are you sure you want to delete ${selectedFiles.length} selected item(s)?`)) return;
+  if (selectedFiles.length === 0) return;
+  if (!confirm(`Are you sure you want to delete ${selectedFiles.length} selected item(s)?`)) return;
 
-    try {
-      const response = await fetch(`${API_BASE}/bulk/delete`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          ids: selectedFiles,
-          updated_by: CURRENT_USER_ID,
-          force: false
-        })
-      });
+  try {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${API_BASE}/bulk/delete`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        ids: selectedFiles,
+        updated_by: CURRENT_USER_ID,
+        force: false
+      })
+    });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to delete items');
-      }
-
-      const result = await response.json();
-      setSuccess(result.message);
-      setSelectedFiles([]);
-      loadFilesAndFolders();
-
-      if (result.results?.errors?.length > 0) {
-        console.warn('Some items could not be deleted:', result.results.errors);
-      }
-    } catch (err) {
-      console.error('Bulk delete error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to delete items');
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to delete items');
     }
-  };
+
+    const result = await response.json();
+    setSuccess(result.message);
+    setSelectedFiles([]);
+    loadFilesAndFolders();
+
+    if (result.results?.errors?.length > 0) {
+      console.warn('Some items could not be deleted:', result.results.errors);
+    }
+  } catch (err) {
+    console.error('Bulk delete error:', err);
+    setError(err instanceof Error ? err.message : 'Failed to delete items');
+  }
+};
 
   const handleDownload = async (file: FileItem) => {
-    if (file.type === 'folder') {
-      // Download folder as ZIP
-      return handleFolderDownload(file.id, file.name);
-    }
+  if (file.type === 'folder') {
+    // Download folder as ZIP
+    return handleFolderDownload(file.id, file.name);
+  }
 
-    try {
-      const response = await fetch(`${API_BASE}/download/${file.id}`);
-      if (!response.ok) throw new Error('Download failed');
+  try {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${API_BASE}/download/${file.id}?user_id=${CURRENT_USER_ID}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    if (!response.ok) throw new Error('Download failed');
 
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = file.name;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
 
-      setSuccess(`"${file.name}" downloaded successfully!`);
-    } catch (err) {
-      console.error('Download error:', err);
-      setError(err instanceof Error ? err.message : 'Download failed');
-    }
-  };
+    setSuccess(`"${file.name}" downloaded successfully!`);
+  } catch (err) {
+    console.error('Download error:', err);
+    setError(err instanceof Error ? err.message : 'Download failed');
+  }
+};
 
-  const handleFolderDownload = async (folderId: string, folderName: string) => {
-    try {
-      setSuccess('Preparing folder download...');
-      const response = await fetch(`${API_BASE}/download/folder/${folderId}`);
-      
-      if (!response.ok) throw new Error('Folder download failed');
+ const handleFolderDownload = async (folderId: string, folderName: string) => {
+  try {
+    setSuccess('Preparing folder download...');
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${API_BASE}/download/folder/${folderId}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    if (!response.ok) throw new Error('Folder download failed');
 
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${folderName}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${folderName}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
 
-      setSuccess(`Folder "${folderName}" downloaded as ZIP successfully!`);
-    } catch (err) {
-      console.error('Folder download error:', err);
-      setError(err instanceof Error ? err.message : 'Folder download failed');
-    }
-  };
+    setSuccess(`Folder "${folderName}" downloaded as ZIP successfully!`);
+  } catch (err) {
+    console.error('Folder download error:', err);
+    setError(err instanceof Error ? err.message : 'Folder download failed');
+  }
+};
 
   const handleBulkDownload = async () => {
-    if (selectedFiles.length === 0) return;
+  if (selectedFiles.length === 0) return;
 
-    if (selectedFiles.length === 1) {
-      const item = allItems.find(item => item.id === selectedFiles[0]);
-      if (item) await handleDownload(item);
-    } else {
-      // Multiple items - create ZIP
+  if (selectedFiles.length === 1) {
+    const item = allItems.find(item => item.id === selectedFiles[0]);
+    if (item) await handleDownload(item);
+  } else {
+    try {
       setSuccess('Preparing bulk download...');
+      const token = localStorage.getItem('token');
       const response = await fetch(`${API_BASE}/download/bulk`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({ itemIds: selectedFiles })
       });
 
@@ -638,8 +692,12 @@ const Files: React.FC<FilesProps> = ({ currentUser }) => {
       window.URL.revokeObjectURL(url);
 
       setSuccess(`${selectedFiles.length} items downloaded as ZIP!`);
+    } catch (err) {
+      console.error('Bulk download error:', err);
+      setError(err instanceof Error ? err.message : 'Bulk download failed');
     }
-  };
+  }
+};
 
   const handleFolderClick = (folder: FileItem) => {
     if (folder.type !== 'folder') return;
