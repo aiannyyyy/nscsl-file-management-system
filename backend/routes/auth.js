@@ -39,7 +39,7 @@ router.post("/login", async  (req, res) => {
         email: user.email,
         position: user.position  // ✅ ADD POSITION TO JWT
       },
-      process.env.JWT_SECRET || "supersecretkey",
+      process.env.JWT_SECRET,
       { expiresIn: "8h" }
     );
     res.json({

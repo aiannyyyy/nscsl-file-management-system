@@ -21,7 +21,7 @@ const authenticateUser = (req, res, next) => {
       return res.status(401).json({ error: 'Access denied. Invalid token format.' });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'supersecretkey');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     // ✅ FIX: support both decoded.id and decoded.user_id (whichever your login route uses)
     const userId = decoded.id ?? decoded.user_id;

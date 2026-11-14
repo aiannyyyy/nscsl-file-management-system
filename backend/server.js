@@ -11,6 +11,13 @@ const http = require("http");
 const socketIo = require("socket.io");
 require("dotenv").config();
 
+// Tokens are signed and checked with JWT_SECRET. Refuse to start without it,
+// instead of falling back to a guessable built-in secret.
+if (!process.env.JWT_SECRET) {
+  console.error("JWT_SECRET is not set. Add it to backend/.env or the server environment.");
+  process.exit(1);
+}
+
 // ============================================
 // DATABASE CONNECTION
 // ============================================
